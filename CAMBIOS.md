@@ -3,6 +3,10 @@
 Cada versión publicada con `scripts/publicar.ps1` agrega aquí su sección. Lo que esté
 entre la versión instalada y la nueva se muestra en la pantalla Actualizaciones.
 
+## 1.0.2 - 2026-10-01
+- Menu lateral que se muestra u oculta (boton del encabezado o Ctrl+B)
+- El instalador genera JWT_SECRET automaticamente
+
 ## 1.0.1 - 2026-10-01
 - Actualizador: GitHub como puente, sin Releases (descarga el zip de la rama main)
 - Nueva pestaña Formas de pago del asiento en Cierre de Caja > Configuración

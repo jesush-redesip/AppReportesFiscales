@@ -51,6 +51,16 @@ const grupos = computed(() => gruposVisibles(auth.permisos, auth.modulos));
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  transition: margin-left 0.2s var(--ease);
+}
+/* Oculto: se desliza fuera por la izquierda y el contenido toma todo el ancho. */
+.sidebar.oculto {
+  margin-left: calc(-1 * var(--sidebar-width));
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
+  }
 }
 .brand {
   height: var(--header-height);

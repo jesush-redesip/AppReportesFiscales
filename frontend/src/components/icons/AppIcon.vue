@@ -14,7 +14,8 @@ export type IconName =
   | 'settings'
   | 'close'
   | 'check'
-  | 'download';
+  | 'download'
+  | 'menu';
 
 defineProps<{ name: IconName; size?: number }>();
 </script>
@@ -72,6 +73,9 @@ defineProps<{ name: IconName; size?: number }>();
     <template v-else-if="name === 'lock'">
       <rect x="4.5" y="10.5" width="15" height="10" rx="1.6" />
       <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
+    </template>
+    <template v-else-if="name === 'menu'">
+      <path d="M4 6.5h16M4 12h16M4 17.5h16" />
     </template>
     <template v-else-if="name === 'download'">
       <path d="M12 4v11M7.5 10.5 12 15l4.5-4.5" />

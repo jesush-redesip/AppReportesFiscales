@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from './stores/auth.store';
 import Sidebar from './components/layout/Sidebar.vue';
@@ -14,6 +14,34 @@ const auth = useAuthStore();
 const debug = useDebugStore();
 const router = useRouter();
 const configuracionAbierta = ref(false);
+
+// Menú lateral que se muestra u oculta (botón del header o Ctrl+B). La preferencia se
+// recuerda en este navegador; si el almacenamiento no está disponible, arranca visible.
+const CLAVE_MENU = 'menu_lateral_visible';
+function leerMenuVisible(): boolean {
+  try {
+    return localStorage.getItem(CLAVE_MENU) !== '0';
+  } catch {
+    return true;
+  }
+}
+const menuVisible = ref(leerMenuVisible());
+function alternarMenu() {
+  menuVisible.value = !menuVisible.value;
+  try {
+    localStorage.setItem(CLAVE_MENU, menuVisible.value ? '1' : '0');
+  } catch {
+    /* sin almacenamiento: solo dura esta sesión */
+  }
+}
+function atajoMenu(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'b') {
+    e.preventDefault();
+    alternarMenu();
+  }
+}
+onMounted(() => window.addEventListener('keydown', atajoMenu));
+onBeforeUnmount(() => window.removeEventListener('keydown', atajoMenu));
 const errorDebug = ref('');
 const actualizaciones = useActualizacionesStore();
 
@@ -48,10 +76,21 @@ function onLogout() {
 
 <template>
   <div v-if="auth.isAuthenticated" class="app-shell">
-    <Sidebar />
+    <Sidebar :class="{ oculto: !menuVisible }" :inert="!menuVisible || undefined" :aria-hidden="!menuVisible || undefined" />
     <div class="app-main">
       <header class="app-header">
-        <Breadcrumb />
+        <div class="app-header-izq">
+          <button
+            class="secundario boton-menu"
+            :aria-expanded="menuVisible"
+            :aria-label="menuVisible ? 'Ocultar menú lateral' : 'Mostrar menú lateral'"
+            :title="(menuVisible ? 'Ocultar' : 'Mostrar') + ' menú lateral (Ctrl+B)'"
+            @click="alternarMenu"
+          >
+            <AppIcon name="menu" :size="17" />
+          </button>
+          <Breadcrumb />
+        </div>
         <div class="app-header-user">
           <span class="empresa" v-if="auth.empresa">
             <AppIcon name="building" :size="15" />
@@ -139,6 +178,21 @@ function onLogout() {
   padding: 0 var(--space-6);
   border-bottom: 1px solid var(--border);
   background: var(--bg);
+}
+.app-header-izq {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.boton-menu {
+  width: 2.1rem;
+  height: 2.1rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 .app-header-user {
   display: flex;
