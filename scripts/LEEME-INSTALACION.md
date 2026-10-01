@@ -17,7 +17,7 @@
    La primera vez el script crea `backend\.env` y lo abre en el Bloc de notas. Complete:
    - `DB_HOST`, `DB_USER`, `DB_PASSWORD`: los datos del SQL Server.
    - `JWT_SECRET`: un texto largo y aleatorio, distinto en cada instalación.
-   - `UPDATE_REPO`: el repositorio de GitHub, con la forma `usuario/repositorio`.
+   - `UPDATE_REPO`: ya viene con `jesush-redesip/AppReportesFiscales`.
 
    Después ejecute el script otra vez.
 5. Abra `http://localhost:3000` en ese equipo, o `http://<ip-del-servidor>:3000` desde las demás PC.
