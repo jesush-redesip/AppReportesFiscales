@@ -1,12 +1,12 @@
 <#
   Reportes Fiscales - instalacion inicial como servicio de Windows (una sola vez por equipo).
 
-  1. Descomprimir reportes-fiscales-vX.Y.Z.zip en la carpeta final, p. ej. C:\ReportesFiscales
+  1. GitHub > Code > Download ZIP y descomprimirlo en la carpeta final, p. ej. C:\ReportesFiscales
   2. Copiar nssm.exe (https://nssm.cc, version 2.24 win64) en C:\ReportesFiscales\scripts\
   3. PowerShell COMO ADMINISTRADOR:
        powershell -ExecutionPolicy Bypass -File C:\ReportesFiscales\scripts\instalar-servicio.ps1
      La primera vez crea backend\.env desde .env.example y se detiene para que lo complete
-     (DB_HOST, DB_USER, DB_PASSWORD, JWT_SECRET, UPDATE_REPO). Luego se ejecuta de nuevo.
+     (DB_HOST, DB_USER, DB_PASSWORD, JWT_SECRET). Luego se ejecuta de nuevo.
 
   Despues de esto las versiones nuevas se instalan desde el aplicativo (SUPERVISOR >
   Actualizaciones). Solo ASCII a proposito (PowerShell 5.1).
@@ -44,7 +44,7 @@ if (-not (Test-Path $envFile)) {
   Copy-Item (Join-Path $backend '.env.example') $envFile
   Write-Host ''
   Write-Host "Se creo $envFile" -ForegroundColor Yellow
-  Write-Host 'Completelo (DB_HOST, DB_USER, DB_PASSWORD, JWT_SECRET, UPDATE_REPO) y vuelva a ejecutar este script.' -ForegroundColor Yellow
+  Write-Host 'Completelo (DB_HOST, DB_USER, DB_PASSWORD, JWT_SECRET) y vuelva a ejecutar este script.' -ForegroundColor Yellow
   notepad.exe $envFile
   exit 1
 }

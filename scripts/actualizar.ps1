@@ -187,7 +187,7 @@ try {
 
   # Limpieza: dependencias anteriores, paquetes descargados viejos y respaldos (quedan 3).
   if (Test-Path -LiteralPath $modulosAnterior) { Remove-Item -LiteralPath $modulosAnterior -Recurse -Force -ErrorAction SilentlyContinue }
-  Get-ChildItem -Path $dirActualizaciones -Directory | Where-Object { $_.FullName -ne (Split-Path -Parent $Origen) } |
+  Get-ChildItem -Path $dirActualizaciones -Directory | Where-Object { $_.FullName -ne $PSScriptRoot } |
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $Origen -Recurse -Force -ErrorAction SilentlyContinue
   Get-ChildItem -Path $dirRespaldos -Directory | Sort-Object CreationTime -Descending | Select-Object -Skip 3 |

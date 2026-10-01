@@ -28,8 +28,10 @@ export const env = {
   /** Instalado como servicio: el backend sirve también el frontend compilado (frontend/dist). */
   produccion: process.env.NODE_ENV === 'production',
   actualizador: {
-    /** Repositorio público de GitHub con los Releases ("usuario/repositorio"). Vacío = desactivado. */
+    /** Repositorio público de GitHub ("usuario/repositorio"). Vacío = desactivado. */
     repo: (process.env.UPDATE_REPO ?? '').trim(),
+    /** Rama de la que se toman las versiones publicadas. */
+    rama: (process.env.UPDATE_BRANCH ?? '').trim() || 'main',
     /** Nombre del servicio de Windows que se detiene y arranca al actualizar. */
     servicio: (process.env.SERVICE_NAME ?? '').trim(),
     /** Opcional: token de GitHub, solo para no chocar con el límite de 60 consultas/hora. */

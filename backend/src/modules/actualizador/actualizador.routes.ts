@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireSupervisor } from '../../shared/auth/permisos.js';
 import { ActualizadorError, consultarEstado, iniciarActualizacion } from './actualizador.service.js';
 
-/** Actualizaciones del aplicativo desde los Releases de GitHub. Solo el SUPERVISOR. */
+/** Actualizaciones del aplicativo desde la rama publicada en GitHub. Solo el SUPERVISOR. */
 export default async function actualizadorRoutes(fastify: FastifyInstance) {
   const soloSupervisor = { preHandler: requireSupervisor };
 

@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,15 +9,25 @@ import { RAIZ_APP, versionInstalada } from '../../shared/app-info.js';
 import { registrarAuditoria } from '../../shared/auditoria/auditoria.js';
 
 /**
- * Actualizador: compara la versión instalada (version.json) con el último Release del
- * repositorio público de GitHub (UPDATE_REPO) y, si el SUPERVISOR lo pide, descarga el
- * .zip, verifica su SHA-256, lo descomprime y lanza scripts/actualizar.ps1 (del paquete
- * NUEVO) fuera del servicio. Ese script detiene el servicio, respalda, reemplaza
- * backend/dist, frontend/dist y templates (nunca .env ni logs), instala dependencias si
- * cambiaron, arranca y, si la versión nueva no responde, vuelve a la anterior.
+ * Actualizador: GitHub hace de puente. El repositorio público (UPDATE_REPO) lleva el
+ * código Y el compilado (backend/dist, frontend/dist); `scripts/publicar.ps1` sube la
+ * versión en version.json, compila y hace push a la rama UPDATE_BRANCH (main).
+ *
+ * El backend compara el version.json de la punta de esa rama con el instalado. Si el
+ * SUPERVISOR lo pide, descarga el zip de ESE commit exacto (no de "main", que podría
+ * moverse en medio), lo descomprime y lanza scripts/actualizar.ps1 (del paquete NUEVO)
+ * fuera del servicio. Ese script detiene el servicio, respalda, reemplaza backend/dist,
+ * frontend/dist y templates (nunca .env ni logs), instala dependencias si cambiaron,
+ * arranca y, si la versión nueva no responde, vuelve a la anterior.
+ *
+ * Solo API de GitHub (sin token: 60 consultas/hora por IP; se cachea 10 minutos):
+ *   GET /repos/:repo/commits/:rama               commit de la punta
+ *   GET /repos/:repo/contents/version.json?ref=  versión de ese commit
+ *   GET /repos/:repo/contents/CAMBIOS.md?ref=    novedades (solo si hay versión nueva)
+ *   GET /repos/:repo/zipball/:sha                el zip (redirige a codeload.github.com)
  *
  * Carpetas de trabajo dentro de la instalación:
- *   _actualizaciones/<tag>/  paquete descargado y descomprimido + log
+ *   _actualizaciones/v<versión>/  zip descargado y descomprimido
  *   _actualizaciones/estado.json  resultado de la última actualización (lo escribe el script)
  *   _respaldos/<versión>_<fecha>/  copia de lo reemplazado (se guardan las 3 últimas)
  */
@@ -28,8 +37,6 @@ const execFileP = promisify(execFile);
 export const DIR_ACTUALIZACIONES = path.join(RAIZ_APP, '_actualizaciones');
 const ARCHIVO_ESTADO = path.join(DIR_ACTUALIZACIONES, 'estado.json');
 const NOMBRE_TAREA = 'ReportesFiscales-Actualizar';
-/** reportes-fiscales-v1.2.3.zip */
-const PATRON_ZIP = /^reportes-fiscales-v?(\d+\.\d+\.\d+)\.zip$/i;
 const MAX_ZIP = 300 * 1024 * 1024;
 const CACHE_MS = 10 * 60 * 1000;
 
@@ -40,31 +47,17 @@ export class ActualizadorError extends Error {
   }
 }
 
-interface AssetGithub {
-  name: string;
-  size: number;
-  browser_download_url: string;
-  /** "sha256:<hex>" (GitHub lo calcula al subir el archivo). */
-  digest?: string | null;
-}
-
-interface ReleaseGithub {
-  tag_name: string;
-  name: string | null;
-  body: string | null;
-  published_at: string | null;
-  html_url: string;
-  assets: AssetGithub[];
-}
-
 export interface VersionDisponible {
   version: string;
-  tag: string;
-  nombre: string;
-  notas: string;
+  /** Commit de GitHub del que se descargaría (completo y abreviado). */
+  sha: string;
+  commit: string;
+  /** Mensaje del commit. */
+  mensaje: string;
   fecha: string | null;
+  /** Secciones de CAMBIOS.md posteriores a la versión instalada. */
+  notas: string;
   url: string;
-  tamano: number;
 }
 
 export interface ResultadoAnterior {
@@ -73,13 +66,14 @@ export interface ResultadoAnterior {
   hasta?: string;
   mensaje?: string;
   fecha?: string;
-  /** Ya quedó en la auditoría (lo marca el backend al arrancar). */
+  /** Ya quedó en la auditoría (lo marca el backend). */
   auditado?: boolean;
 }
 
 export interface EstadoActualizador {
   versionActual: string;
   repo: string;
+  rama: string;
   /** Hay repositorio configurado (UPDATE_REPO). */
   configurado: boolean;
   /** Corre como servicio de Windows: solo así se puede actualizar desde el botón. */
@@ -91,7 +85,7 @@ export interface EstadoActualizador {
   error: string | null;
 }
 
-/** 1.10.0 > 1.9.3. Solo números (los Releases marcados como pre-release no llegan aquí). */
+/** 1.10.0 > 1.9.3. Solo números. */
 export function compararVersiones(a: string, b: string): number {
   const pa = a.replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
   const pb = b.replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
@@ -102,9 +96,9 @@ export function compararVersiones(a: string, b: string): number {
   return 0;
 }
 
-function cabecerasGithub(): Record<string, string> {
+function cabecerasGithub(accept = 'application/vnd.github+json'): Record<string, string> {
   const h: Record<string, string> = {
-    Accept: 'application/vnd.github+json',
+    Accept: accept,
     'User-Agent': 'reportes-fiscales-actualizador',
     'X-GitHub-Api-Version': '2022-11-28',
   };
@@ -112,55 +106,81 @@ function cabecerasGithub(): Record<string, string> {
   return h;
 }
 
-let cache: { hasta: number; release: ReleaseGithub | null } | null = null;
-
-async function ultimoRelease(forzar: boolean): Promise<ReleaseGithub | null> {
-  if (!forzar && cache && cache.hasta > Date.now()) return cache.release;
+function urlRepo(): string {
   const repo = env.actualizador.repo;
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new ActualizadorError(`UPDATE_REPO no es válido ("${repo}"); debe ser "usuario/repositorio".`);
+  return `${env.actualizador.apiGithub}/repos/${repo}`;
+}
+
+async function pedirGithub(url: string, accept?: string): Promise<Response> {
   let resp: Response;
   try {
-    resp = await fetch(`${env.actualizador.apiGithub}/repos/${repo}/releases/latest`, {
-      headers: cabecerasGithub(),
-      signal: AbortSignal.timeout(15000),
-    });
+    resp = await fetch(url, { headers: cabecerasGithub(accept), signal: AbortSignal.timeout(15000) });
   } catch (err) {
     throw new ActualizadorError(`No se pudo conectar con GitHub: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  if (resp.status === 404) {
-    // Repositorio sin Releases publicados (o inexistente).
-    cache = { hasta: Date.now() + CACHE_MS, release: null };
-    return null;
   }
   if (resp.status === 403 || resp.status === 429) {
     throw new ActualizadorError('GitHub rechazó la consulta por límite de peticiones; intente en unos minutos (o configure GITHUB_TOKEN).');
   }
-  if (!resp.ok) throw new ActualizadorError(`GitHub respondió ${resp.status} al consultar el último Release.`);
-  const release = (await resp.json()) as ReleaseGithub;
-  cache = { hasta: Date.now() + CACHE_MS, release };
-  return release;
+  return resp;
 }
 
-function zipDe(release: ReleaseGithub): { asset: AssetGithub; version: string } | null {
-  for (const asset of release.assets ?? []) {
-    const m = PATRON_ZIP.exec(asset.name);
-    if (m) return { asset, version: m[1] };
+/** Contenido de un archivo del repositorio en un commit dado (null si no existe). */
+async function archivoDelRepo(ruta: string, sha: string): Promise<string | null> {
+  const resp = await pedirGithub(`${urlRepo()}/contents/${ruta}?ref=${sha}`, 'application/vnd.github.raw+json');
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new ActualizadorError(`GitHub respondió ${resp.status} al leer ${ruta}.`);
+  return (await resp.text()).replace(/^\uFEFF/, '');
+}
+
+interface Punta {
+  sha: string;
+  mensaje: string;
+  fecha: string | null;
+  url: string;
+  version: string | null;
+}
+
+let cache: { hasta: number; punta: Punta } | null = null;
+
+/** Commit de la punta de la rama y la versión que declara su version.json. */
+async function puntaDeRama(forzar: boolean): Promise<Punta> {
+  if (!forzar && cache && cache.hasta > Date.now()) return cache.punta;
+  const rama = env.actualizador.rama;
+  const resp = await pedirGithub(`${urlRepo()}/commits/${encodeURIComponent(rama)}`);
+  if (resp.status === 404 || resp.status === 422) {
+    throw new ActualizadorError(`No se encontró la rama "${rama}" en ${env.actualizador.repo} (¿repositorio vacío o nombre incorrecto?).`);
   }
-  return null;
+  if (!resp.ok) throw new ActualizadorError(`GitHub respondió ${resp.status} al consultar la rama ${rama}.`);
+  const c = (await resp.json()) as { sha: string; html_url: string; commit: { message: string; committer?: { date?: string } } };
+  const textoVersion = await archivoDelRepo('version.json', c.sha);
+  let version: string | null = null;
+  try {
+    version = textoVersion ? String(JSON.parse(textoVersion).version ?? '').trim() || null : null;
+  } catch {
+    version = null;
+  }
+  const punta: Punta = {
+    sha: c.sha,
+    mensaje: c.commit.message.split('\n')[0],
+    fecha: c.commit.committer?.date ?? null,
+    url: c.html_url,
+    version,
+  };
+  cache = { hasta: Date.now() + CACHE_MS, punta };
+  return punta;
 }
 
-function aDisponible(release: ReleaseGithub): VersionDisponible | null {
-  const zip = zipDe(release);
-  if (!zip) return null;
-  return {
-    version: zip.version,
-    tag: release.tag_name,
-    nombre: release.name || release.tag_name,
-    notas: release.body ?? '',
-    fecha: release.published_at,
-    url: release.html_url,
-    tamano: zip.asset.size,
-  };
+/** De CAMBIOS.md, las secciones "## X.Y.Z" posteriores a la instalada (hasta la nueva). */
+export function notasEntre(cambios: string, instalada: string, nueva: string): string {
+  const partes = cambios.split(/^(?=##\s+v?\d+\.\d+\.\d+)/m);
+  return partes
+    .filter((p) => {
+      const v = /^##\s+v?(\d+\.\d+\.\d+)/.exec(p)?.[1];
+      return v && compararVersiones(v, instalada) > 0 && compararVersiones(v, nueva) <= 0;
+    })
+    .map((p) => p.trim())
+    .join('\n\n');
 }
 
 function leerResultadoAnterior(): ResultadoAnterior | null {
@@ -184,15 +204,17 @@ async function corriendoComoServicio(): Promise<boolean> {
 }
 
 let enCurso = false;
+let notasCache: { sha: string; instalada: string; notas: string } | null = null;
 
 export async function consultarEstado(forzar: boolean): Promise<EstadoActualizador> {
-  const versionActual = versionInstalada();
   // El script escribe el resultado DESPUÉS de que arranca la versión nueva: se audita aquí
   // (la pantalla consulta el estado al terminar) y no solo al arrancar.
   await auditarResultadoActualizacion();
+  const versionActual = versionInstalada();
   const base: EstadoActualizador = {
     versionActual,
     repo: env.actualizador.repo,
+    rama: env.actualizador.rama,
     configurado: Boolean(env.actualizador.repo),
     comoServicio: await corriendoComoServicio(),
     ultima: null,
@@ -203,44 +225,51 @@ export async function consultarEstado(forzar: boolean): Promise<EstadoActualizad
   };
   if (!base.configurado) return base;
   try {
-    const release = await ultimoRelease(forzar);
-    if (release) {
-      base.ultima = aDisponible(release);
-      if (!base.ultima) base.error = `El Release ${release.tag_name} no trae un archivo reportes-fiscales-vX.Y.Z.zip.`;
+    const punta = await puntaDeRama(forzar);
+    if (!punta.version) {
+      base.error = `El último commit de ${base.rama} no tiene un version.json válido.`;
+      return base;
     }
-    base.hayNueva = Boolean(base.ultima && compararVersiones(base.ultima.version, versionActual) > 0);
+    base.hayNueva = compararVersiones(punta.version, versionActual) > 0;
+    let notas = '';
+    if (base.hayNueva) {
+      if (notasCache && notasCache.sha === punta.sha && notasCache.instalada === versionActual) {
+        notas = notasCache.notas;
+      } else {
+        notas = notasEntre((await archivoDelRepo('CAMBIOS.md', punta.sha)) ?? '', versionActual, punta.version);
+        notasCache = { sha: punta.sha, instalada: versionActual, notas };
+      }
+    }
+    base.ultima = {
+      version: punta.version,
+      sha: punta.sha,
+      commit: punta.sha.slice(0, 7),
+      mensaje: punta.mensaje,
+      fecha: punta.fecha,
+      notas,
+      url: punta.url,
+    };
   } catch (err) {
     base.error = err instanceof Error ? err.message : String(err);
   }
   return base;
 }
 
-/** SHA-256 esperado: el que calcula GitHub (digest) o, si no viene, el archivo .sha256 del Release. */
-async function shaEsperado(release: ReleaseGithub, asset: AssetGithub): Promise<string> {
-  const digest = asset.digest?.match(/^sha256:([0-9a-f]{64})$/i)?.[1];
-  if (digest) return digest.toLowerCase();
-  const archivoSha = release.assets.find((a) => a.name.toLowerCase() === `${asset.name.toLowerCase()}.sha256`);
-  if (!archivoSha) throw new ActualizadorError(`El Release no trae ${asset.name}.sha256 para verificar el paquete.`);
-  const resp = await fetch(archivoSha.browser_download_url, { headers: { 'User-Agent': 'reportes-fiscales-actualizador' }, signal: AbortSignal.timeout(15000) });
-  if (!resp.ok) throw new ActualizadorError(`No se pudo descargar ${archivoSha.name} (${resp.status}).`);
-  const hex = (await resp.text()).match(/[0-9a-f]{64}/i)?.[0];
-  if (!hex) throw new ActualizadorError(`${archivoSha.name} no contiene un SHA-256 válido.`);
-  return hex.toLowerCase();
-}
-
-async function descargar(url: string, destino: string): Promise<string> {
-  const resp = await fetch(url, { headers: { 'User-Agent': 'reportes-fiscales-actualizador' }, signal: AbortSignal.timeout(10 * 60 * 1000) });
-  if (!resp.ok || !resp.body) throw new ActualizadorError(`No se pudo descargar el paquete (${resp.status}).`);
-  const hash = createHash('sha256');
+async function descargar(url: string, destino: string): Promise<void> {
+  let resp: Response;
+  try {
+    resp = await fetch(url, { headers: cabecerasGithub(), signal: AbortSignal.timeout(10 * 60 * 1000) });
+  } catch (err) {
+    throw new ActualizadorError(`No se pudo descargar la versión: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!resp.ok || !resp.body) throw new ActualizadorError(`No se pudo descargar la versión (GitHub respondió ${resp.status}).`);
   let bytes = 0;
   const cuerpo = Readable.fromWeb(resp.body as import('node:stream/web').ReadableStream);
   cuerpo.on('data', (trozo: Buffer) => {
     bytes += trozo.length;
-    if (bytes > MAX_ZIP) cuerpo.destroy(new ActualizadorError('El paquete supera el tamaño máximo permitido.'));
-    hash.update(trozo);
+    if (bytes > MAX_ZIP) cuerpo.destroy(new ActualizadorError('El zip supera el tamaño máximo permitido.'));
   });
   await pipeline(cuerpo, fs.createWriteStream(destino));
-  return hash.digest('hex');
 }
 
 /** tar.exe de Windows (bsdtar) descomprime .zip y rechaza rutas absolutas o con "..". */
@@ -250,17 +279,29 @@ async function descomprimir(zip: string, destino: string): Promise<void> {
   try {
     await execFileP(tar, ['-xf', zip, '-C', destino], { windowsHide: true, timeout: 5 * 60 * 1000 });
   } catch (err) {
-    throw new ActualizadorError(`No se pudo descomprimir el paquete: ${err instanceof Error ? err.message : String(err)}`);
+    throw new ActualizadorError(`No se pudo descomprimir la versión: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+/** El zip de GitHub trae todo dentro de una carpeta "<usuario>-<repo>-<sha>". */
+function raizDelZip(dir: string): string {
+  if (fs.existsSync(path.join(dir, 'version.json'))) return dir;
+  const carpetas = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory());
+  if (carpetas.length === 1) return path.join(dir, carpetas[0].name);
+  throw new ActualizadorError('El zip descargado no tiene la estructura esperada.');
 }
 
 function validarPaquete(dir: string, version: string): void {
   const faltan = ['version.json', 'backend/dist/server.js', 'backend/package.json', 'frontend/dist/index.html', 'scripts/actualizar.ps1']
     .filter((rel) => !fs.existsSync(path.join(dir, rel)));
-  if (faltan.length) throw new ActualizadorError(`El paquete está incompleto, falta: ${faltan.join(', ')}.`);
+  if (faltan.length) {
+    throw new ActualizadorError(
+      `La versión en GitHub está incompleta, falta: ${faltan.join(', ')}. Publíquela con scripts/publicar.ps1 (compila y sube el dist).`,
+    );
+  }
   const delPaquete = JSON.parse(fs.readFileSync(path.join(dir, 'version.json'), 'utf8').replace(/^\uFEFF/, '')).version;
   if (delPaquete !== version) {
-    throw new ActualizadorError(`El paquete dice ser la versión ${delPaquete}, pero el archivo es de la ${version}.`);
+    throw new ActualizadorError(`El zip dice ser la versión ${delPaquete}, pero se esperaba la ${version}.`);
   }
 }
 
@@ -289,33 +330,27 @@ async function lanzarScript(dirTrabajo: string, dirNuevo: string): Promise<void>
 }
 
 /**
- * Descarga el .zip del último Release, verifica su SHA-256, lo descomprime y revisa que
- * esté completo. No toca la instalación: solo escribe en _actualizaciones/v<versión>/.
+ * Descarga el zip del commit de la punta de la rama, lo descomprime y revisa que esté
+ * completo. No toca la instalación: solo escribe en _actualizaciones/v<versión>/.
  */
 export async function prepararPaquete(): Promise<{ desde: string; version: string; dirTrabajo: string; dirNuevo: string }> {
-  const release = await ultimoRelease(true);
-  if (!release) throw new ActualizadorError('El repositorio no tiene Releases publicados.');
-  const zip = zipDe(release);
-  if (!zip) throw new ActualizadorError(`El Release ${release.tag_name} no trae un archivo reportes-fiscales-vX.Y.Z.zip.`);
+  const punta = await puntaDeRama(true);
+  if (!punta.version) throw new ActualizadorError(`El último commit de ${env.actualizador.rama} no tiene un version.json válido.`);
   const desde = versionInstalada();
-  if (compararVersiones(zip.version, desde) <= 0) throw new ActualizadorError(`Ya tiene la versión ${desde}; no hay nada nuevo.`);
-  if (zip.asset.size > MAX_ZIP) throw new ActualizadorError('El paquete supera el tamaño máximo permitido.');
+  if (compararVersiones(punta.version, desde) <= 0) throw new ActualizadorError(`Ya tiene la versión ${desde}; no hay nada nuevo.`);
 
-  const dirTrabajo = path.join(DIR_ACTUALIZACIONES, `v${zip.version}`);
+  const dirTrabajo = path.join(DIR_ACTUALIZACIONES, `v${punta.version}`);
   fs.rmSync(dirTrabajo, { recursive: true, force: true });
   fs.mkdirSync(dirTrabajo, { recursive: true });
-  const archivoZip = path.join(dirTrabajo, zip.asset.name);
+  const archivoZip = path.join(dirTrabajo, `${punta.sha.slice(0, 7)}.zip`);
 
-  const esperado = await shaEsperado(release, zip.asset);
-  const obtenido = await descargar(zip.asset.browser_download_url, archivoZip);
-  if (obtenido !== esperado) {
-    throw new ActualizadorError('El paquete descargado no coincide con su SHA-256: puede estar dañado o alterado. No se instaló nada.');
-  }
-  const dirNuevo = path.join(dirTrabajo, 'nuevo');
-  await descomprimir(archivoZip, dirNuevo);
-  validarPaquete(dirNuevo, zip.version);
+  await descargar(`${urlRepo()}/zipball/${punta.sha}`, archivoZip);
+  const dirExtraido = path.join(dirTrabajo, 'nuevo');
+  await descomprimir(archivoZip, dirExtraido);
+  const dirNuevo = raizDelZip(dirExtraido);
+  validarPaquete(dirNuevo, punta.version);
 
-  return { desde, version: zip.version, dirTrabajo, dirNuevo };
+  return { desde, version: punta.version, dirTrabajo, dirNuevo };
 }
 
 export async function iniciarActualizacion(): Promise<{ desde: string; hasta: string; mensaje: string }> {
@@ -363,8 +398,8 @@ function esReciente(fecha: string | undefined): boolean {
 }
 
 /**
- * Al arrancar: si el script dejó el resultado de una actualización (ok o error) que aún no
- * está en la auditoría, se registra como acción del sistema y se marca para no repetirla.
+ * Si el script dejó el resultado de una actualización (ok o error) que aún no está en la
+ * auditoría, se registra como acción del sistema y se marca para no repetirla.
  */
 export async function auditarResultadoActualizacion(): Promise<void> {
   const r = leerResultadoAnterior();

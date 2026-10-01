@@ -1,7 +1,10 @@
-# Dependencias y compilados
+# Dependencias
 node_modules/
-dist/
 release/
+
+# El compilado SÍ va al repositorio (backend/dist y frontend/dist): es lo que descargan
+# los clientes al actualizarse. Los source maps no.
+*.map
 
 # Secretos: NUNCA al repositorio (es público)
 .env

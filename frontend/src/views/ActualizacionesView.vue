@@ -4,8 +4,9 @@ import { api } from '../lib/api';
 import { useActualizacionesStore, type EstadoActualizador } from '../stores/actualizaciones.store';
 
 /**
- * Actualizaciones del aplicativo (solo SUPERVISOR). El backend consulta el último Release
- * de GitHub; "Actualizar ahora" lo descarga, verifica y lo instala reiniciando el servicio.
+ * Actualizaciones del aplicativo (solo SUPERVISOR). El backend compara el version.json de la
+ * rama publicada en GitHub con el instalado; "Actualizar ahora" descarga ese commit como zip
+ * y lo instala reiniciando el servicio.
  * Mientras tanto esta pantalla espera a que /health responda la versión nueva.
  */
 const store = useActualizacionesStore();
@@ -27,10 +28,6 @@ async function consultar(forzar = false) {
   } finally {
     cargando.value = false;
   }
-}
-
-function formatoTamano(bytes: number) {
-  return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
 function formatoFecha(iso: string | null | undefined) {
@@ -112,8 +109,8 @@ function claseResultado(e: EstadoActualizador['ultimoResultado']) {
   <section>
     <h1>Actualizaciones</h1>
     <p class="ayuda">
-      Las versiones nuevas se publican en GitHub. Al actualizar se respalda la versión actual; si la nueva no arranca,
-      se restaura sola. Nunca se tocan la configuración (.env) ni los registros.
+      Las versiones nuevas se toman de GitHub (se publican con scripts/publicar.ps1). Al actualizar se respalda la
+      versión actual; si la nueva no arranca, se restaura sola. Nunca se tocan la configuración (.env) ni los registros.
     </p>
 
     <div class="card panel">
@@ -126,7 +123,7 @@ function claseResultado(e: EstadoActualizador['ultimoResultado']) {
           <span class="etiqueta">Última disponible</span>
           <span class="numero" :class="{ nueva: estado?.hayNueva }">{{ estado?.ultima?.version ?? '—' }}</span>
           <span v-if="estado?.ultima" class="sub">
-            {{ formatoFecha(estado.ultima.fecha) }} · {{ formatoTamano(estado.ultima.tamano) }}
+            {{ formatoFecha(estado.ultima.fecha) }} · commit {{ estado.ultima.commit }}
           </span>
         </div>
         <div class="acciones">
@@ -141,10 +138,9 @@ function claseResultado(e: EstadoActualizador['ultimoResultado']) {
       </div>
 
       <p v-if="estado && !estado.configurado" class="aviso">
-        No hay repositorio configurado. Agregue <code>UPDATE_REPO=usuario/repositorio</code> en <code>backend/.env</code> y reinicie el servicio.
+        No hay repositorio configurado. Agregue <code>UPDATE_REPO=jesush-redesip/AppReportesFiscales</code> en <code>backend/.env</code> y reinicie el servicio.
       </p>
       <p v-else-if="estado && !estado.hayNueva && estado.ultima && !estado.error" class="aviso ok-texto">Está al día.</p>
-      <p v-else-if="estado?.configurado && !estado.ultima && !estado.error" class="aviso">El repositorio {{ estado.repo }} todavía no tiene versiones publicadas.</p>
       <p v-if="motivoSinBoton" class="aviso">{{ motivoSinBoton }}</p>
       <p v-if="estado?.error" class="error">{{ estado.error }}</p>
       <p v-if="error" class="error">{{ error }}</p>
@@ -155,12 +151,12 @@ function claseResultado(e: EstadoActualizador['ultimoResultado']) {
       </div>
     </div>
 
-    <div v-if="estado?.ultima" class="card panel">
+    <div v-if="estado?.ultima && estado.hayNueva" class="card panel">
       <h2>
-        Novedades de {{ estado.ultima.nombre }}
+        Novedades hasta la {{ estado.ultima.version }}
         <a :href="estado.ultima.url" target="_blank" rel="noopener">ver en GitHub</a>
       </h2>
-      <pre class="notas">{{ estado.ultima.notas || 'Sin notas.' }}</pre>
+      <pre class="notas">{{ estado.ultima.notas || estado.ultima.mensaje || 'Sin notas.' }}</pre>
     </div>
 
     <div v-if="estado?.ultimoResultado" class="card panel">

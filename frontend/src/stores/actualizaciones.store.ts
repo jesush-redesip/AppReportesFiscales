@@ -5,9 +5,10 @@ import { api } from '../lib/api';
 export interface EstadoActualizador {
   versionActual: string;
   repo: string;
+  rama: string;
   configurado: boolean;
   comoServicio: boolean;
-  ultima: { version: string; tag: string; nombre: string; notas: string; fecha: string | null; url: string; tamano: number } | null;
+  ultima: { version: string; sha: string; commit: string; mensaje: string; notas: string; fecha: string | null; url: string } | null;
   hayNueva: boolean;
   enCurso: boolean;
   ultimoResultado: { estado: 'en-curso' | 'ok' | 'error'; desde?: string; hasta?: string; mensaje?: string; fecha?: string } | null;
