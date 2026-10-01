@@ -1,0 +1,29 @@
+# Dependencias y compilados
+node_modules/
+dist/
+release/
+
+# Secretos: NUNCA al repositorio (es público)
+.env
+.env.*
+!.env.example
+!frontend/.env.production
+
+# Datos locales de cada instalación
+logs/
+*.log
+_actualizaciones/
+_respaldos/
+backend/node_modules.anterior/
+scripts/nssm.exe
+
+# Archivos de prueba locales
+backend/_tmp_*
+backend/check_sp_tmp.js
+
+# Herramientas
+.claude/
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store

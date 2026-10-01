@@ -1,0 +1,227 @@
+:root {
+  /* Redes IP brand palette */
+  --color-brand: #86bb25;
+  --color-brand-dark: #6d9a1e;
+  --color-brand-darker: #547a17;
+  --color-brand-bg: rgba(134, 187, 37, 0.1);
+  --color-brand-bg-strong: rgba(134, 187, 37, 0.16);
+  --color-dark: #202020;
+  --color-gray: #555652;
+  --color-white: #ffffff;
+
+  --bg: var(--color-white);
+  --bg-subtle: #f7f8f5;
+  --bg-sidebar: #fbfcf9;
+  --bg-elevated: var(--color-white);
+  --text: var(--color-dark);
+  --text-muted: var(--color-gray);
+  --text-faint: #9a9b96;
+  --border: #e7e8e2;
+  --border-strong: #d7d9d0;
+
+  --color-error: #c0392b;
+  --color-error-bg: rgba(192, 57, 43, 0.08);
+  --color-success: #2f8f3f;
+  --color-success-bg: rgba(47, 143, 63, 0.1);
+
+  /* Spacing scale (8px base, per data-dense dashboard guidance) */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 16px;
+
+  --shadow-sm: 0 1px 2px rgba(32, 32, 32, 0.05);
+  --shadow: 0 1px 3px rgba(32, 32, 32, 0.06), 0 1px 2px rgba(32, 32, 32, 0.04);
+  --shadow-lg: 0 8px 24px rgba(32, 32, 32, 0.08), 0 2px 6px rgba(32, 32, 32, 0.05);
+
+  --sidebar-width: 264px;
+  --header-height: 64px;
+
+  --sans: 'Plus Jakarta Sans', system-ui, 'Segoe UI', Roboto, sans-serif;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  font: 15px/1.55 var(--sans);
+  color-scheme: light;
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--sans);
+  color: var(--text);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+h1 {
+  font-size: 1.65rem;
+  font-weight: 800;
+  margin: 0 0 0.35rem;
+}
+
+h2 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0 0 0.6rem;
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--color-brand-darker);
+}
+
+::selection {
+  background: var(--color-brand-bg-strong);
+}
+
+/* Slim, unobtrusive scrollbars for the dense content areas */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Form controls, shared across every filter form */
+input,
+select,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+input[type='date'],
+input[type='text'],
+input[type='password'],
+input[type='number'],
+select {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.7rem;
+  background: var(--bg);
+  height: 2.35rem;
+  transition:
+    border-color 0.15s var(--ease),
+    box-shadow 0.15s var(--ease);
+}
+
+input[type='date']:hover,
+input[type='text']:hover,
+input[type='password']:hover,
+input[type='number']:hover,
+select:hover {
+  border-color: var(--border-strong);
+}
+
+input[type='date']:focus-visible,
+input[type='text']:focus-visible,
+input[type='password']:focus-visible,
+input[type='number']:focus-visible,
+select:focus-visible,
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+input[type='date']:focus,
+input[type='text']:focus,
+input[type='password']:focus,
+input[type='number']:focus,
+select:focus {
+  border-color: var(--color-brand);
+  box-shadow: 0 0 0 3px var(--color-brand-bg);
+}
+
+button {
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-brand);
+  color: var(--color-white);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 0.15s var(--ease),
+    transform 0.1s var(--ease),
+    box-shadow 0.15s var(--ease);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
+button:hover:not(:disabled) {
+  background: var(--color-brand-dark);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+button.secundario {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+button.secundario:hover:not(:disabled) {
+  background: var(--bg-subtle);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+/* Shared "card" surface used by dashboard tiles, filter bars, and tables */
+.card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
