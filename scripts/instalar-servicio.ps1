@@ -42,9 +42,15 @@ if (-not (Test-Path $Nssm)) { throw "No se encontro nssm.exe. Descarguelo de htt
 $envFile = Join-Path $backend '.env'
 if (-not (Test-Path $envFile)) {
   Copy-Item (Join-Path $backend '.env.example') $envFile
+  # JWT_SECRET aleatorio y propio de este equipo: nadie tiene que inventarlo.
+  $bytes = New-Object byte[] 48
+  [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+  $secreto = [Convert]::ToBase64String($bytes)
+  $texto = (Get-Content -Raw $envFile) -replace '(?m)^JWT_SECRET=[ \t]*\r?$', "JWT_SECRET=$secreto"
+  [System.IO.File]::WriteAllText($envFile, $texto, (New-Object System.Text.UTF8Encoding($false)))
   Write-Host ''
   Write-Host "Se creo $envFile" -ForegroundColor Yellow
-  Write-Host 'Completelo (DB_HOST, DB_USER, DB_PASSWORD, JWT_SECRET) y vuelva a ejecutar este script.' -ForegroundColor Yellow
+  Write-Host 'Completelo (DB_HOST, DB_USER, DB_PASSWORD; JWT_SECRET ya se genero) y vuelva a ejecutar este script.' -ForegroundColor Yellow
   notepad.exe $envFile
   exit 1
 }

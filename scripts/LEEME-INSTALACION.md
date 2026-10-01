@@ -21,7 +21,7 @@ los clientes la ven en **Actualizaciones** y la descargan como zip.
    ```
    La primera vez el script crea `backend\.env` y lo abre en el Bloc de notas. Complete:
    - `DB_HOST`, `DB_USER`, `DB_PASSWORD`: los datos del SQL Server.
-   - `JWT_SECRET`: un texto largo y aleatorio, distinto en cada instalación.
+   - `JWT_SECRET`: se genera solo, distinto en cada equipo.
    - `UPDATE_REPO` y `UPDATE_BRANCH`: ya vienen configurados.
 
    Después ejecute el script otra vez.
