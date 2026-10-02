@@ -40,7 +40,11 @@ function atajoMenu(e: KeyboardEvent) {
     alternarMenu();
   }
 }
-onMounted(() => window.addEventListener('keydown', atajoMenu));
+onMounted(() => {
+  window.addEventListener('keydown', atajoMenu);
+  // La sesión guardada puede ser de antes de un cambio de permisos o de módulos activos.
+  void auth.refrescarAcceso();
+});
 onBeforeUnmount(() => window.removeEventListener('keydown', atajoMenu));
 const errorDebug = ref('');
 const actualizaciones = useActualizacionesStore();
@@ -131,7 +135,7 @@ function onLogout() {
             </RouterLink>
           </template>
           <button
-            v-if="auth.esSupervisor"
+            v-if="auth.puedeAdministrarPermisos"
             class="secundario"
             aria-label="Permisos de Usuario"
             title="Permisos de Usuario"

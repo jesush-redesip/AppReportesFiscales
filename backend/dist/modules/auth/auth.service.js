@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { env } from '../../config/env.js';
 import * as repo from './auth.repository.js';
-import { getModulosUsuario, getPermisosUsuario } from '../../shared/auth/permisos.js';
+import { accesoEfectivo } from '../../shared/auth/permisos.js';
 export class LoginError extends Error {
     constructor(message) {
         super(message);
@@ -43,14 +43,11 @@ export async function selectEmpresa(preAuthToken, codEmpresa) {
         bd: empresa.bd,
     };
     const token = jwt.sign(sessionPayload, env.jwtSecret, { expiresIn: '8h' });
-    const [permisos, modulosAsignados] = await Promise.all([
-        getPermisosUsuario(payload.codUsuario),
-        getModulosUsuario(payload.codUsuario),
-    ]);
+    const acceso = await accesoEfectivo(payload.codUsuario);
     // El SUPERVISOR también ve solo los módulos que tenga asignados. Su administración
     // (Permisos de Usuario, Auditoría, Debug) no depende de módulos, así que nunca puede
     // quedarse sin acceso a la pantalla donde se los vuelve a asignar.
-    return { token, usuario: payload.usuario, codUsuario: payload.codUsuario, empresa, permisos, modulos: modulosAsignados };
+    return { token, usuario: payload.usuario, codUsuario: payload.codUsuario, empresa, ...acceso };
 }
 export function verifySessionToken(token) {
     const payload = jwt.verify(token, env.jwtSecret);

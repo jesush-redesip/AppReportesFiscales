@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { api } from '../lib/api';
 import { useAuthStore } from '../stores/auth.store';
 import type { ModuloCatalogo, UsuarioPermisos } from '../lib/types';
-import { PERMISO_CONFIG_CAJAS } from '../lib/reportes';
+import { PERMISO_CONFIG_CAJAS, PERMISO_SUPERVISOR_INTERNO } from '../lib/reportes';
 import BaseModal from './BaseModal.vue';
 import AppIcon from './icons/AppIcon.vue';
 
@@ -19,7 +19,12 @@ const permisosError = ref('');
 const permisosGuardado = ref(false);
 const filtroUsuario = ref('');
 const modulosCatalogo = ref<ModuloCatalogo[]>([]);
+/** Si la instalación tiene el Cierre de Caja (Módulos de la instalación). */
+const cajasActivo = ref(true);
 const codUsuarioSeleccionado = ref<number | null>(null);
+
+/** Pestañas: la de módulos de la instalación es solo del SUPERVISOR. */
+const pestana = ref<'permisos' | 'modulos'>('permisos');
 
 /** Filtra por nombre o por código. */
 const usuariosFiltrados = computed(() => {
@@ -67,11 +72,24 @@ function grupoCompleto(u: UsuarioPermisos, modulos: ModuloCatalogo[]) {
  * cuentan solo los reportes del catálogo más el cierre; la Configuración del cierre es
  * un sub-permiso (como Contabilizar) y no suma. */
 function resumenAcceso(u: UsuarioPermisos) {
-  const total = modulosCatalogo.value.length + 1; // +1 por el cierre de caja
+  const conCierre = cajasActivo.value ? 1 : 0;
+  const total = modulosCatalogo.value.length + conCierre;
   const reportes = u.modulos.filter((m) => modulosCatalogo.value.some((c) => c.id === m)).length;
-  const activos = reportes + (u.visualizarCajas ? 1 : 0);
+  const activos = reportes + (conCierre && u.visualizarCajas ? 1 : 0);
   return `${activos}/${total}`;
 }
+
+const esInterno = (u: UsuarioPermisos) => u.codUsuario !== 0 && u.modulos.includes(PERMISO_SUPERVISOR_INTERNO);
+
+/** Solo el SUPERVISOR nombra supervisores internos (y nunca a sí mismo). */
+const supervisorInterno = computed({
+  get: () => (usuarioSeleccionado.value ? esInterno(usuarioSeleccionado.value) : false),
+  set: (activar: boolean) => {
+    const u = usuarioSeleccionado.value;
+    if (!u || u.codUsuario === 0 || activar === esInterno(u)) return;
+    alternarModulo(u, PERMISO_SUPERVISOR_INTERNO);
+  },
+});
 
 /** "Configuración" del Cierre de Caja: se guarda como un módulo más (PERMISO_CONFIG_CAJAS). */
 const puedeConfigurarCajas = computed({
@@ -89,10 +107,11 @@ async function cargarPermisos() {
   try {
     const [lista, catalogo] = await Promise.all([
       api.get<UsuarioPermisos[]>('/api/config/permisos'),
-      api.get<ModuloCatalogo[]>('/api/config/modulos'),
+      api.get<{ modulos: ModuloCatalogo[]; cajasActivo: boolean }>('/api/config/modulos'),
     ]);
     usuarios.value = lista;
-    modulosCatalogo.value = catalogo;
+    modulosCatalogo.value = catalogo.modulos;
+    cajasActivo.value = catalogo.cajasActivo;
   } catch (err) {
     permisosError.value = err instanceof Error ? err.message : 'Error al cargar los permisos.';
   } finally {
@@ -125,16 +144,7 @@ async function guardarPermisos() {
     await api.put('/api/config/permisos', { items: [item] });
     permisosGuardado.value = true;
     // Si se editó a sí mismo, el menú debe reflejarlo ya, no en el próximo login.
-    if (item.codUsuario === auth.codUsuario) {
-      auth.actualizarPermisosPropios(
-        {
-          visualizarCajas: item.visualizarCajas,
-          contabilizar: item.contabilizar,
-          descontabilizar: item.descontabilizar,
-        },
-        item.modulos,
-      );
-    }
+    if (item.codUsuario === auth.codUsuario) await auth.refrescarAcceso();
   } catch (err) {
     permisosError.value = err instanceof Error ? err.message : 'Error al guardar los permisos.';
   } finally {
@@ -149,14 +159,93 @@ watch(
   (isOpen) => {
     if (!isOpen) return;
     permisosGuardado.value = false;
-    if (auth.esSupervisor) cargarPermisos();
+    pestana.value = 'permisos';
+    if (auth.puedeAdministrarPermisos) cargarPermisos();
   },
 );
+
+// --- Módulos de la instalación (solo SUPERVISOR) ---
+interface EstadoModulo {
+  id: string;
+  nombre: string;
+  grupo: string;
+  exclusivo: boolean;
+  activo: boolean;
+}
+const estadoModulos = ref<EstadoModulo[]>([]);
+/** Cambios sin guardar: id -> activo. */
+const pendientes = ref<Record<string, boolean>>({});
+const modulosCargando = ref(false);
+const modulosGuardando = ref(false);
+const modulosError = ref('');
+const modulosGuardado = ref('');
+
+const modulosInstalacionPorGrupo = computed(() => {
+  const grupos = new Map<string, EstadoModulo[]>();
+  for (const m of estadoModulos.value) grupos.set(m.grupo, [...(grupos.get(m.grupo) ?? []), m]);
+  return [...grupos.entries()].map(([grupo, modulos]) => ({ grupo, modulos }));
+});
+const activoEnPantalla = (m: EstadoModulo) => pendientes.value[m.id] ?? m.activo;
+const cantidadPendientes = computed(() => Object.keys(pendientes.value).length);
+
+function alternarActivo(m: EstadoModulo) {
+  const nuevo = !activoEnPantalla(m);
+  const copia = { ...pendientes.value };
+  if (nuevo === m.activo) delete copia[m.id];
+  else copia[m.id] = nuevo;
+  pendientes.value = copia;
+}
+
+async function cargarModulosInstalacion() {
+  modulosCargando.value = true;
+  modulosError.value = '';
+  try {
+    estadoModulos.value = await api.get<EstadoModulo[]>('/api/config/modulos-activos');
+    pendientes.value = {};
+  } catch (err) {
+    modulosError.value = err instanceof Error ? err.message : 'Error al cargar los módulos.';
+  } finally {
+    modulosCargando.value = false;
+  }
+}
+
+async function guardarModulosInstalacion() {
+  modulosGuardando.value = true;
+  modulosError.value = '';
+  modulosGuardado.value = '';
+  try {
+    const items = Object.entries(pendientes.value).map(([id, activo]) => ({ id, activo }));
+    const r = await api.put<{ ok: boolean; cambios: unknown[] }>('/api/config/modulos-activos', { items });
+    modulosGuardado.value = `Guardado (${r.cambios.length} cambio${r.cambios.length === 1 ? '' : 's'}).`;
+    await Promise.all([cargarModulosInstalacion(), cargarPermisos(), auth.refrescarAcceso()]);
+  } catch (err) {
+    modulosError.value = err instanceof Error ? err.message : 'Error al guardar los módulos.';
+  } finally {
+    modulosGuardando.value = false;
+  }
+}
+
+watch(pestana, (p) => {
+  modulosGuardado.value = '';
+  if (p === 'modulos' && auth.esSupervisor) cargarModulosInstalacion();
+});
 </script>
 
 <template>
   <BaseModal :open="open" title="Permisos de Usuario" ancho="760px" @close="emit('close')">
-    <section v-if="auth.esSupervisor">
+    <div v-if="auth.esSupervisor" class="pestanas" role="tablist">
+      <button type="button" role="tab" :aria-selected="pestana === 'permisos'" :class="{ activa: pestana === 'permisos' }" @click="pestana = 'permisos'">
+        Permisos de usuario
+      </button>
+      <button type="button" role="tab" :aria-selected="pestana === 'modulos'" :class="{ activa: pestana === 'modulos' }" @click="pestana = 'modulos'">
+        Módulos de la instalación
+      </button>
+    </div>
+
+    <section v-if="auth.puedeAdministrarPermisos && pestana === 'permisos'">
+      <p v-if="auth.esSupervisorInterno" class="nota">
+        Como supervisor interno puede asignar módulos y permisos a los usuarios de su grupo.
+      </p>
       <p v-if="permisosLoading" class="estado">Cargando...</p>
       <template v-else>
         <div class="filtro-usuarios">
@@ -174,6 +263,7 @@ watch(
                 @click="codUsuarioSeleccionado = u.codUsuario"
               >
                 <span class="nombre">{{ u.usuario }}</span>
+                <span v-if="esInterno(u)" class="badge interno" title="Supervisor interno">Sup.</span>
                 <span class="badge" :class="{ cero: resumenAcceso(u).startsWith('0/') }">{{ resumenAcceso(u) }}</span>
               </button>
             </li>
@@ -185,7 +275,14 @@ watch(
             <template v-else>
               <h3>{{ usuarioSeleccionado.usuario }}</h3>
 
-              <div class="bloque">
+              <div v-if="auth.esSupervisor && usuarioSeleccionado.codUsuario !== 0" class="bloque">
+                <div class="bloque-titulo">Administración</div>
+                <label class="check"><input v-model="supervisorInterno" type="checkbox" /> Supervisor interno</label>
+                <p class="ayuda-check">Puede asignar permisos a los usuarios de su grupo y configurar el cierre de caja.</p>
+              </div>
+              <p v-else-if="esInterno(usuarioSeleccionado)" class="nota">Supervisor interno (lo asigna el SUPERVISOR).</p>
+
+              <div v-if="cajasActivo" class="bloque">
                 <div class="bloque-titulo">Cierre de Caja</div>
                 <label class="check"
                   ><input type="checkbox" v-model="usuarioSeleccionado.visualizarCajas" /> Acceso al módulo</label
@@ -247,10 +344,105 @@ watch(
         </button>
       </template>
     </section>
+
+    <section v-if="auth.esSupervisor && pestana === 'modulos'">
+      <p class="nota">
+        Qué módulos tiene este grupo económico. Un módulo desactivado desaparece del menú de todos y no se puede asignar;
+        al reactivarlo, cada usuario recupera lo que tenía.
+      </p>
+      <p v-if="modulosCargando" class="estado">Cargando...</p>
+      <template v-else>
+        <div class="modulos-instalacion">
+          <div v-for="g in modulosInstalacionPorGrupo" :key="g.grupo" class="bloque">
+            <div class="bloque-titulo">{{ g.grupo }}</div>
+            <label v-for="m in g.modulos" :key="m.id" class="check" :class="{ cambiado: m.id in pendientes }">
+              <input type="checkbox" :checked="activoEnPantalla(m)" @change="alternarActivo(m)" />
+              {{ m.nombre }}
+              <span v-if="m.exclusivo" class="badge interno" title="Módulo exclusivo: llega desactivado">Exclusivo</span>
+              <span v-if="!activoEnPantalla(m)" class="inactivo">desactivado</span>
+            </label>
+          </div>
+        </div>
+        <p v-if="modulosError" class="error">{{ modulosError }}</p>
+        <p v-if="modulosGuardado && !modulosError" class="exito"><AppIcon name="check" :size="14" /> {{ modulosGuardado }}</p>
+        <div class="acciones-modulos">
+          <button type="button" class="secundario" :disabled="!cantidadPendientes || modulosGuardando" @click="pendientes = {}">
+            Descartar
+          </button>
+          <button type="button" :disabled="!cantidadPendientes || modulosGuardando" @click="guardarModulosInstalacion">
+            {{ modulosGuardando ? 'Guardando...' : cantidadPendientes ? `Guardar ${cantidadPendientes} cambio${cantidadPendientes === 1 ? '' : 's'}` : 'Guardar' }}
+          </button>
+        </div>
+      </template>
+    </section>
   </BaseModal>
 </template>
 
 <style scoped>
+.pestanas {
+  display: flex;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-4);
+}
+.pestanas button {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 0.45rem 0.8rem;
+  height: auto;
+  margin-bottom: -1px;
+}
+.pestanas button:hover:not(:disabled) {
+  background: none;
+  color: var(--text);
+}
+.pestanas button.activa {
+  color: var(--color-brand-darker);
+  border-bottom-color: var(--color-brand);
+}
+.nota {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 0 0 var(--space-3);
+}
+.ayuda-check {
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  margin: 0.1rem 0 0 1.3rem;
+}
+.badge.interno {
+  color: var(--color-brand-darker);
+  background: var(--color-brand-bg-strong);
+}
+.modulos-instalacion {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: var(--space-2) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+  max-height: 22rem;
+  overflow-y: auto;
+}
+.check.cambiado {
+  color: var(--color-brand-darker);
+  font-weight: 600;
+}
+.inactivo {
+  font-size: 0.7rem;
+  color: var(--color-error);
+}
+.acciones-modulos {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
 .estado {
   color: var(--text-muted);
   font-size: 0.85rem;

@@ -54,7 +54,9 @@ router.beforeEach((to) => {
   // Configuración del cierre: quien tenga el permiso "Configuración" del Cierre de Caja
   // además del acceso al cierre (el backend valida lo mismo). El SUPERVISOR incluido.
   if (to.path === '/cajas/configuracion') {
-    const permitido = auth.permisos.visualizarCajas && auth.modulos.includes(PERMISO_CONFIG_CAJAS);
+    // El backend solo incluye este permiso si el usuario puede usarlo de verdad (con
+    // acceso al cierre, o por ser supervisor interno).
+    const permitido = auth.modulos.includes(PERMISO_CONFIG_CAJAS);
     return permitido ? true : { path: '/' };
   }
 

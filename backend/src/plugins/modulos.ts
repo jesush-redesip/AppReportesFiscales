@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import { esModuloReporte } from '../shared/auth/modulos.js';
 import { getModulosUsuario } from '../shared/auth/permisos.js';
+import { estaActivo } from '../shared/auth/activacion.js';
 
 const PREFIJO = '/api/reportes/';
 
@@ -43,6 +44,12 @@ async function modulosPlugin(fastify: FastifyInstance) {
         error: 'Forbidden',
         message: `El módulo "${modulo}" no está registrado en el catálogo de permisos.`,
       });
+      return;
+    }
+
+    // Módulo que este grupo económico no tiene (o que el SUPERVISOR desactivó).
+    if (!(await estaActivo(modulo))) {
+      reply.status(403).send({ error: 'Forbidden', message: 'Este módulo no está activo en esta instalación.' });
       return;
     }
 

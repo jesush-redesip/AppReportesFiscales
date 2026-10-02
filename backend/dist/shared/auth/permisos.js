@@ -1,6 +1,8 @@
 import sql from 'mssql';
 import { generalPool, generalPoolConnect } from '../db/general-pool.js';
-import { PERMISO_CONFIG_CAJAS } from './modulos.js';
+import { MODULO_CAJAS, PERMISO_CONFIG_CAJAS, PERMISO_SUPERVISOR_INTERNO, esModuloReporte } from './modulos.js';
+import { estaActivo, modulosActivos } from './activacion.js';
+const MSJ_CAJAS_INACTIVO = 'El Cierre de Caja no está activo en esta instalación.';
 const FLAG_TO_KEY = {
     VISUALIZARCAJAS: 'visualizarCajas',
     CONTABILIZAR: 'contabilizar',
@@ -37,6 +39,11 @@ export async function getPermisosUsuario(codUsuario) {
  */
 export function requirePermiso(flag) {
     return async (request, reply) => {
+        // Las tres banderas son del Cierre de Caja: si la instalación no lo tiene, nadie pasa.
+        if (!(await estaActivo(MODULO_CAJAS))) {
+            reply.status(403).send({ error: 'Forbidden', message: MSJ_CAJAS_INACTIVO });
+            return;
+        }
         const permisos = await getPermisosUsuario(request.user.codUsuario);
         if (!permisos[FLAG_TO_KEY[flag]]) {
             reply.status(403).send({ error: 'Forbidden', message: `No tiene el permiso ${flag}.` });
@@ -119,6 +126,10 @@ export async function reemplazarModulosUsuario(transaction, codUsuario, modulos)
 export function requireModulo(modulo) {
     return async (request, reply) => {
         const codUsuario = request.user.codUsuario;
+        if (!(await estaActivo(modulo))) {
+            reply.status(403).send({ error: 'Forbidden', message: 'Este módulo no está activo en esta instalación.' });
+            return;
+        }
         const modulos = await getModulosUsuario(codUsuario);
         if (!modulos.includes(modulo)) {
             reply.status(403).send({ error: 'Forbidden', message: 'No tiene acceso a este módulo.' });
@@ -133,7 +144,14 @@ export function requireModulo(modulo) {
  */
 export async function requireConfiguracionCajas(request, reply) {
     const codUsuario = request.user.codUsuario;
+    if (!(await estaActivo(MODULO_CAJAS))) {
+        reply.status(403).send({ error: 'Forbidden', message: MSJ_CAJAS_INACTIVO });
+        return;
+    }
     const [permisos, modulos] = await Promise.all([getPermisosUsuario(codUsuario), getModulosUsuario(codUsuario)]);
+    // El supervisor interno configura el cierre por su rol, sin necesitar los permisos sueltos.
+    if (tieneSupervisorInterno(codUsuario, modulos))
+        return;
     if (!permisos.visualizarCajas || !modulos.includes(PERMISO_CONFIG_CAJAS)) {
         reply
             .status(403)
@@ -151,5 +169,49 @@ export async function requireSupervisor(request, reply) {
             .status(403)
             .send({ error: 'Forbidden', message: 'Solo el SUPERVISOR puede acceder a la configuración del sistema.' });
     }
+}
+/** Supervisor interno: marcado por el SUPERVISOR; el propio SUPERVISOR nunca lo es. */
+function tieneSupervisorInterno(codUsuario, modulos) {
+    return !esSupervisor(codUsuario) && modulos.includes(PERMISO_SUPERVISOR_INTERNO);
+}
+export async function esSupervisorInterno(codUsuario) {
+    if (esSupervisor(codUsuario))
+        return false;
+    return tieneSupervisorInterno(codUsuario, await getModulosUsuario(codUsuario));
+}
+/**
+ * Fastify preHandler de Permisos de Usuario: el SUPERVISOR o un supervisor interno. Lo
+ * que el interno NO puede hacer ahí (tocar al SUPERVISOR, nombrar supervisores
+ * internos) lo controla `updatePermisos`.
+ */
+export async function requireAdminPermisos(request, reply) {
+    const codUsuario = request.user.codUsuario;
+    if (esSupervisor(codUsuario) || (await esSupervisorInterno(codUsuario)))
+        return;
+    reply.status(403).send({ error: 'Forbidden', message: 'Solo el SUPERVISOR o un supervisor interno pueden administrar permisos.' });
+}
+/** Acceso real del usuario, para la sesión del frontend (menú y rutas). */
+export async function accesoEfectivo(codUsuario) {
+    const [permisos, asignados, activos] = await Promise.all([
+        getPermisosUsuario(codUsuario),
+        getModulosUsuario(codUsuario),
+        modulosActivos(),
+    ]);
+    const cajasActivo = activos.has(MODULO_CAJAS);
+    const supervisorInterno = tieneSupervisorInterno(codUsuario, asignados);
+    const modulos = asignados.filter((m) => {
+        if (esModuloReporte(m))
+            return activos.has(m);
+        if (m === PERMISO_CONFIG_CAJAS)
+            return cajasActivo;
+        return m === PERMISO_SUPERVISOR_INTERNO ? supervisorInterno : true;
+    });
+    if (supervisorInterno && cajasActivo && !modulos.includes(PERMISO_CONFIG_CAJAS))
+        modulos.push(PERMISO_CONFIG_CAJAS);
+    return {
+        permisos: cajasActivo ? permisos : { visualizarCajas: false, contabilizar: false, descontabilizar: false },
+        modulos,
+        supervisorInterno,
+    };
 }
 //# sourceMappingURL=permisos.js.map

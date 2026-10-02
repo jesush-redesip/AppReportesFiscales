@@ -1,4 +1,6 @@
 import { defineStore } from 'pinia';
+import { api } from '../lib/api';
+import { PERMISO_SUPERVISOR_INTERNO } from '../lib/reportes';
 import { useCatalogosStore } from './catalogos.store';
 
 const TOKEN_KEY = 'auth_token';
@@ -100,6 +102,13 @@ export const useAuthStore = defineStore('auth', {
     /** En ICG el administrador es CODUSUARIO = 0 (la fila SUPERVISOR). Solo él
      * administra los permisos de usuarios; el backend aplica el mismo criterio. */
     esSupervisor: (state) => state.codUsuario === 0,
+    /** Supervisor interno del cliente (lo marca el SUPERVISOR): administra permisos y
+     * configura el cierre. El backend solo lo incluye en los módulos de quien lo es. */
+    esSupervisorInterno: (state) => state.codUsuario !== 0 && state.modulos.includes(PERMISO_SUPERVISOR_INTERNO),
+    /** Quién ve el engranaje de Permisos de Usuario. */
+    puedeAdministrarPermisos(): boolean {
+      return this.esSupervisor || this.esSupervisorInterno;
+    },
     /** Sin módulos asignados no se ve ningún reporte; el backend rechaza igual. */
     puedeVerModulo: (state) => (id: string) => state.modulos.includes(id),
   },
@@ -148,6 +157,20 @@ export const useAuthStore = defineStore('auth', {
           modulos,
         } satisfies SesionPersistida),
       );
+    },
+    /**
+     * Vuelve a pedir al backend el acceso real (permisos, módulos activos, supervisor
+     * interno). Al abrir la app y tras cambiar permisos o módulos activos: el menú no se
+     * queda con lo que había al iniciar sesión. Si falla, se conserva lo que había.
+     */
+    async refrescarAcceso() {
+      if (!this.token) return;
+      try {
+        const acceso = await api.get<{ permisos: PermisosCaja; modulos: string[] }>('/api/auth/acceso');
+        this.actualizarPermisosPropios(acceso.permisos, acceso.modulos);
+      } catch {
+        /* sin cambios */
+      }
     },
     logout() {
       useCatalogosStore().$reset();

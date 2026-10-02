@@ -1,11 +1,19 @@
 import sql from 'mssql';
 import { generalPool, generalPoolConnect } from '../../shared/db/general-pool.js';
-import { esModuloValido, PERMISO_CONFIG_CAJAS } from '../../shared/auth/modulos.js';
-import { getModulosPorUsuario, reemplazarModulosUsuario } from '../../shared/auth/permisos.js';
+import { esModuloReporte, esModuloValido, MODULO_CAJAS, PERMISO_CONFIG_CAJAS, PERMISO_SUPERVISOR_INTERNO, } from '../../shared/auth/modulos.js';
+import { CODUSUARIO_SUPERVISOR, getModulosPorUsuario, reemplazarModulosUsuario } from '../../shared/auth/permisos.js';
+import { modulosActivos } from '../../shared/auth/activacion.js';
 export class ModuloInvalidoError extends Error {
     constructor(modulo) {
         super(`El módulo "${modulo}" no existe.`);
         this.name = 'ModuloInvalidoError';
+    }
+}
+/** Lo que el supervisor interno no puede hacer en esta pantalla. */
+export class PermisoDenegadoError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'PermisoDenegadoError';
     }
 }
 const truthy = (v) => v === 1 || String(v ?? '').trim() === '1';
@@ -22,7 +30,7 @@ const truthy = (v) => v === 1 || String(v ?? '').trim() === '1';
  * and DESCONTABILIZAR are INT (0/1), but CONTABILIZAR is NVARCHAR(1) ('0'/'1') —
  * confirmed live, not a typo to "fix".
  */
-export async function listUsuariosConPermisos() {
+export async function listUsuariosConPermisos(admin) {
     await generalPoolConnect;
     const [result, modulosPorUsuario] = await Promise.all([
         generalPool.request().query(`
@@ -33,7 +41,9 @@ export async function listUsuariosConPermisos() {
     `),
         getModulosPorUsuario(),
     ]);
-    return result.recordset.map((r) => ({
+    // El supervisor interno no ve (ni puede editar) al SUPERVISOR de la consultora.
+    const filas = admin.esSupervisor ? result.recordset : result.recordset.filter((r) => r.CODUSUARIO !== CODUSUARIO_SUPERVISOR);
+    return filas.map((r) => ({
         codUsuario: r.CODUSUARIO,
         usuario: String(r.USUARIO ?? '').trim(),
         visualizarCajas: truthy(r.VISUALIZARCAJAS),
@@ -50,15 +60,42 @@ export async function listUsuariosConPermisos() {
  * Other columns on INSERT (VISUALIZARPAGARES, etc.) all have DB-level defaults
  * (confirmed live), so omitting them here is safe.
  */
-export async function updatePermisos(items) {
+export async function updatePermisos(items, admin) {
     // Se validan TODOS los módulos antes de abrir la transacción: así un id inválido
     // falla sin haber tocado nada, en vez de a mitad del guardado.
     for (const item of items) {
+        if (!admin.esSupervisor && item.codUsuario === CODUSUARIO_SUPERVISOR) {
+            throw new PermisoDenegadoError('No puede modificar los permisos del SUPERVISOR.');
+        }
         for (const modulo of item.modulos) {
             if (!esModuloValido(modulo))
                 throw new ModuloInvalidoError(modulo);
         }
     }
+    // Lo que no se ve en la pantalla se conserva tal cual estaba: los módulos desactivados
+    // en la instalación, el Cierre de Caja si está desactivado, y la marca de supervisor
+    // interno cuando quien guarda no es el SUPERVISOR.
+    const [actuales, activos] = await Promise.all([listUsuariosConPermisos({ ...admin, esSupervisor: true }), modulosActivos()]);
+    const porCodigo = new Map(actuales.map((u) => [u.codUsuario, u]));
+    const cajasActivo = activos.has(MODULO_CAJAS);
+    items = items.map((item) => {
+        const previo = porCodigo.get(item.codUsuario);
+        const antes = previo?.modulos ?? [];
+        const flags = cajasActivo
+            ? { visualizarCajas: item.visualizarCajas, contabilizar: item.contabilizar, descontabilizar: item.descontabilizar }
+            : {
+                visualizarCajas: previo?.visualizarCajas ?? false,
+                contabilizar: previo?.contabilizar ?? false,
+                descontabilizar: previo?.descontabilizar ?? false,
+            };
+        const oculto = (m) => (esModuloReporte(m) && !activos.has(m)) ||
+            (m === PERMISO_CONFIG_CAJAS && !cajasActivo) ||
+            (m === PERMISO_SUPERVISOR_INTERNO && (!admin.esSupervisor || item.codUsuario === CODUSUARIO_SUPERVISOR));
+        const modulos = [...new Set([...item.modulos.filter((m) => !oculto(m)), ...antes.filter((m) => oculto(m))])].filter(
+        // El SUPERVISOR nunca es supervisor interno: ya lo puede todo.
+        (m) => !(m === PERMISO_SUPERVISOR_INTERNO && item.codUsuario === CODUSUARIO_SUPERVISOR));
+        return { codUsuario: item.codUsuario, ...flags, modulos };
+    });
     await generalPoolConnect;
     const transaction = new sql.Transaction(generalPool);
     await transaction.begin();

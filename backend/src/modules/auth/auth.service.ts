@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { env } from '../../config/env.js';
 import * as repo from './auth.repository.js';
-import { getModulosUsuario, getPermisosUsuario, type PermisosCaja } from '../../shared/auth/permisos.js';
+import { accesoEfectivo, type PermisosCaja } from '../../shared/auth/permisos.js';
 
 export interface SessionTokenPayload {
   purpose: 'session';
@@ -33,8 +33,10 @@ export interface SelectEmpresaResult {
    * mutación de Cajas siempre se revalida fresca contra la BD en el backend
    * (`requirePermiso`), nunca confiando en este snapshot de sesión. */
   permisos: PermisosCaja;
-  /** Módulos que este usuario puede ver en el menú (el SUPERVISOR ve todos). */
+  /** Módulos que este usuario puede usar (asignados y activos en la instalación). */
   modulos: string[];
+  /** Supervisor interno del cliente: administra permisos y configura el cierre. */
+  supervisorInterno: boolean;
 }
 
 export class LoginError extends Error {
@@ -79,14 +81,11 @@ export async function selectEmpresa(preAuthToken: string, codEmpresa: number): P
     bd: empresa.bd,
   };
   const token = jwt.sign(sessionPayload, env.jwtSecret, { expiresIn: '8h' });
-  const [permisos, modulosAsignados] = await Promise.all([
-    getPermisosUsuario(payload.codUsuario),
-    getModulosUsuario(payload.codUsuario),
-  ]);
+  const acceso = await accesoEfectivo(payload.codUsuario);
   // El SUPERVISOR también ve solo los módulos que tenga asignados. Su administración
   // (Permisos de Usuario, Auditoría, Debug) no depende de módulos, así que nunca puede
   // quedarse sin acceso a la pantalla donde se los vuelve a asignar.
-  return { token, usuario: payload.usuario, codUsuario: payload.codUsuario, empresa, permisos, modulos: modulosAsignados };
+  return { token, usuario: payload.usuario, codUsuario: payload.codUsuario, empresa, ...acceso };
 }
 
 export function verifySessionToken(token: string): SessionTokenPayload {

@@ -1,7 +1,10 @@
 import sql from 'mssql';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { generalPool, generalPoolConnect } from '../db/general-pool.js';
-import { PERMISO_CONFIG_CAJAS, type ModuloId } from './modulos.js';
+import { MODULO_CAJAS, PERMISO_CONFIG_CAJAS, PERMISO_SUPERVISOR_INTERNO, esModuloReporte, type ModuloId } from './modulos.js';
+import { estaActivo, modulosActivos } from './activacion.js';
+
+const MSJ_CAJAS_INACTIVO = 'El Cierre de Caja no está activo en esta instalación.';
 
 export type PermisoFlag = 'VISUALIZARCAJAS' | 'CONTABILIZAR' | 'DESCONTABILIZAR';
 
@@ -51,6 +54,11 @@ export async function getPermisosUsuario(codUsuario: number): Promise<PermisosCa
  */
 export function requirePermiso(flag: PermisoFlag) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
+    // Las tres banderas son del Cierre de Caja: si la instalación no lo tiene, nadie pasa.
+    if (!(await estaActivo(MODULO_CAJAS))) {
+      reply.status(403).send({ error: 'Forbidden', message: MSJ_CAJAS_INACTIVO });
+      return;
+    }
     const permisos = await getPermisosUsuario(request.user!.codUsuario);
     if (!permisos[FLAG_TO_KEY[flag]]) {
       reply.status(403).send({ error: 'Forbidden', message: `No tiene el permiso ${flag}.` });
@@ -149,6 +157,10 @@ export async function reemplazarModulosUsuario(
 export function requireModulo(modulo: ModuloId) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const codUsuario = request.user!.codUsuario;
+    if (!(await estaActivo(modulo))) {
+      reply.status(403).send({ error: 'Forbidden', message: 'Este módulo no está activo en esta instalación.' });
+      return;
+    }
     const modulos = await getModulosUsuario(codUsuario);
     if (!modulos.includes(modulo)) {
       reply.status(403).send({ error: 'Forbidden', message: 'No tiene acceso a este módulo.' });
@@ -164,7 +176,13 @@ export function requireModulo(modulo: ModuloId) {
  */
 export async function requireConfiguracionCajas(request: FastifyRequest, reply: FastifyReply) {
   const codUsuario = request.user!.codUsuario;
+  if (!(await estaActivo(MODULO_CAJAS))) {
+    reply.status(403).send({ error: 'Forbidden', message: MSJ_CAJAS_INACTIVO });
+    return;
+  }
   const [permisos, modulos] = await Promise.all([getPermisosUsuario(codUsuario), getModulosUsuario(codUsuario)]);
+  // El supervisor interno configura el cierre por su rol, sin necesitar los permisos sueltos.
+  if (tieneSupervisorInterno(codUsuario, modulos)) return;
   if (!permisos.visualizarCajas || !modulos.includes(PERMISO_CONFIG_CAJAS)) {
     reply
       .status(403)
@@ -183,4 +201,55 @@ export async function requireSupervisor(request: FastifyRequest, reply: FastifyR
       .status(403)
       .send({ error: 'Forbidden', message: 'Solo el SUPERVISOR puede acceder a la configuración del sistema.' });
   }
+}
+
+/** Supervisor interno: marcado por el SUPERVISOR; el propio SUPERVISOR nunca lo es. */
+function tieneSupervisorInterno(codUsuario: number, modulos: string[]): boolean {
+  return !esSupervisor(codUsuario) && modulos.includes(PERMISO_SUPERVISOR_INTERNO);
+}
+
+export async function esSupervisorInterno(codUsuario: number): Promise<boolean> {
+  if (esSupervisor(codUsuario)) return false;
+  return tieneSupervisorInterno(codUsuario, await getModulosUsuario(codUsuario));
+}
+
+/**
+ * Fastify preHandler de Permisos de Usuario: el SUPERVISOR o un supervisor interno. Lo
+ * que el interno NO puede hacer ahí (tocar al SUPERVISOR, nombrar supervisores
+ * internos) lo controla `updatePermisos`.
+ */
+export async function requireAdminPermisos(request: FastifyRequest, reply: FastifyReply) {
+  const codUsuario = request.user!.codUsuario;
+  if (esSupervisor(codUsuario) || (await esSupervisorInterno(codUsuario))) return;
+  reply.status(403).send({ error: 'Forbidden', message: 'Solo el SUPERVISOR o un supervisor interno pueden administrar permisos.' });
+}
+
+export interface AccesoEfectivo {
+  permisos: PermisosCaja;
+  /** Lo que el usuario puede usar de verdad: sus asignaciones, menos lo que no está
+   * activo en la instalación, más la Configuración del cierre si es supervisor interno. */
+  modulos: string[];
+  supervisorInterno: boolean;
+}
+
+/** Acceso real del usuario, para la sesión del frontend (menú y rutas). */
+export async function accesoEfectivo(codUsuario: number): Promise<AccesoEfectivo> {
+  const [permisos, asignados, activos] = await Promise.all([
+    getPermisosUsuario(codUsuario),
+    getModulosUsuario(codUsuario),
+    modulosActivos(),
+  ]);
+  const cajasActivo = activos.has(MODULO_CAJAS);
+  const supervisorInterno = tieneSupervisorInterno(codUsuario, asignados);
+  const modulos = asignados.filter((m) => {
+    if (esModuloReporte(m)) return activos.has(m);
+    if (m === PERMISO_CONFIG_CAJAS) return cajasActivo;
+    return m === PERMISO_SUPERVISOR_INTERNO ? supervisorInterno : true;
+  });
+  if (supervisorInterno && cajasActivo && !modulos.includes(PERMISO_CONFIG_CAJAS)) modulos.push(PERMISO_CONFIG_CAJAS);
+  return {
+    permisos: cajasActivo ? permisos : { visualizarCajas: false, contabilizar: false, descontabilizar: false },
+    modulos,
+    supervisorInterno,
+  };
 }

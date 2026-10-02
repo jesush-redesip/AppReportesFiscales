@@ -1,4 +1,5 @@
 import { loginWithPassword, selectEmpresa, LoginError } from './auth.service.js';
+import { accesoEfectivo } from '../../shared/auth/permisos.js';
 const loginBodySchema = {
     type: 'object',
     required: ['password'],
@@ -15,6 +16,12 @@ const selectEmpresaBodySchema = {
     },
 };
 export default async function authRoutes(fastify) {
+    /**
+     * Acceso actual del usuario de la sesión (permisos, módulos, supervisor interno). El
+     * frontend lo pide al abrir y tras cambiar permisos o módulos activos: así el menú no
+     * queda con lo que había al iniciar sesión.
+     */
+    fastify.get('/api/auth/acceso', async (req) => accesoEfectivo(req.user.codUsuario));
     fastify.post('/api/auth/login', { schema: { body: loginBodySchema } }, async (req, reply) => {
         try {
             return await loginWithPassword(req.body.password);

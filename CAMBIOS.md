@@ -3,6 +3,11 @@
 Cada versión publicada con `scripts/publicar.ps1` agrega aquí su sección. Lo que esté
 entre la versión instalada y la nueva se muestra en la pantalla Actualizaciones.
 
+## 1.0.4 - 2026-10-02
+- Supervisor interno: el SUPERVISOR puede marcar a un usuario del cliente para que asigne permisos y configure el cierre
+- Modulos de la instalacion: el SUPERVISOR activa o desactiva por grupo economico el Cierre de Caja y cada reporte
+- El menu se actualiza con el acceso real del usuario al abrir la aplicacion
+
 ## 1.0.3 - 2026-10-02
 - Retenciones de IVA: la vista previa muestra los totales
 - Retenciones ISLR: el codigo de proveedor sin decimales y sin sumar, y el % de retencion sin sumar

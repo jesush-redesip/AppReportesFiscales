@@ -1,26 +1,72 @@
-import { requireSupervisor } from '../../shared/auth/permisos.js';
-import { MODULOS } from '../../shared/auth/modulos.js';
+import { esSupervisor, requireAdminPermisos, requireSupervisor } from '../../shared/auth/permisos.js';
+import { MODULO_CAJAS, MODULOS } from '../../shared/auth/modulos.js';
+import { ActivacionError, estadoModulos, guardarActivacion, modulosActivos } from '../../shared/auth/activacion.js';
 import { updatePermisosBodySchema } from './permisos.schema.js';
-import { listUsuariosConPermisos, updatePermisos, ModuloInvalidoError } from './permisos.repository.js';
+import { listUsuariosConPermisos, updatePermisos, ModuloInvalidoError, PermisoDenegadoError, } from './permisos.repository.js';
+const administrador = (req) => ({
+    codUsuario: req.user.codUsuario,
+    esSupervisor: esSupervisor(req.user.codUsuario),
+});
 /**
- * Administración de permisos: reservada al SUPERVISOR, tanto leer como escribir. Ver
- * qué puede hacer cada usuario también es información de administración, así que el
- * listado va detrás del mismo gate — el frontend además esconde la pestaña, pero eso
- * es solo presentación.
+ * Administración de permisos: el SUPERVISOR (la consultora) y los supervisores internos
+ * del cliente, tanto leer como escribir. Lo que el interno no puede hacer (ver o tocar al
+ * SUPERVISOR, nombrar supervisores internos) lo controla el repositorio.
+ *
+ * Los módulos activos de la instalación son solo del SUPERVISOR.
  */
 export default async function permisosRoutes(fastify) {
     const soloSupervisor = { preHandler: requireSupervisor };
-    fastify.get('/api/config/permisos', soloSupervisor, async () => listUsuariosConPermisos());
-    /** Catálogo de módulos asignables, para que la ventana de configuración lo pinte. */
-    fastify.get('/api/config/modulos', soloSupervisor, async () => MODULOS);
-    fastify.put('/api/config/permisos', { ...soloSupervisor, schema: { body: updatePermisosBodySchema } }, async (req, reply) => {
+    const administradores = { preHandler: requireAdminPermisos };
+    fastify.get('/api/config/permisos', administradores, async (req) => listUsuariosConPermisos(administrador(req)));
+    /** Módulos asignables (solo los activos en la instalación) y si el cierre está activo. */
+    fastify.get('/api/config/modulos', administradores, async () => {
+        const activos = await modulosActivos();
+        return { modulos: MODULOS.filter((m) => activos.has(m.id)), cajasActivo: activos.has(MODULO_CAJAS) };
+    });
+    /** Módulos de la instalación (grupo económico): qué existe en este cliente. */
+    fastify.get('/api/config/modulos-activos', soloSupervisor, async () => estadoModulos());
+    // Auditoría: "Módulos de la instalación", con los cambios (antes → después).
+    fastify.put('/api/config/modulos-activos', {
+        ...soloSupervisor,
+        schema: {
+            body: {
+                type: 'object',
+                required: ['items'],
+                properties: {
+                    items: {
+                        type: 'array',
+                        maxItems: 100,
+                        items: {
+                            type: 'object',
+                            required: ['id', 'activo'],
+                            properties: { id: { type: 'string', maxLength: 50 }, activo: { type: 'boolean' } },
+                        },
+                    },
+                },
+            },
+        },
+    }, async (req, reply) => {
         try {
-            await updatePermisos(req.body.items);
+            const cambios = await guardarActivacion(req.body.items, req.user.usuario ?? null);
+            return { ok: true, cambios };
+        }
+        catch (err) {
+            if (err instanceof ActivacionError)
+                return reply.status(400).send({ error: 'BadRequest', message: err.message });
+            throw err;
+        }
+    });
+    fastify.put('/api/config/permisos', { ...administradores, schema: { body: updatePermisosBodySchema } }, async (req, reply) => {
+        try {
+            await updatePermisos(req.body.items, administrador(req));
             return { ok: true };
         }
         catch (err) {
             if (err instanceof ModuloInvalidoError) {
                 return reply.status(400).send({ error: 'BadRequest', message: err.message });
+            }
+            if (err instanceof PermisoDenegadoError) {
+                return reply.status(403).send({ error: 'Forbidden', message: err.message });
             }
             throw err;
         }

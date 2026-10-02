@@ -25,8 +25,28 @@ export const MODULOS = [
  * Contabilizar/Descontabilizar. Requiere además VISUALIZARCAJAS.
  */
 export const PERMISO_CONFIG_CAJAS = 'cajas-configuracion';
-const IDS = new Set([...MODULOS.map((m) => m.id), PERMISO_CONFIG_CAJAS]);
-/** Id asignable a un usuario: un reporte de `MODULOS` o `PERMISO_CONFIG_CAJAS`. */
+/**
+ * Supervisor interno del cliente: un usuario del grupo económico que puede asignar
+ * permisos y configurar el cierre, pero no lo reservado al SUPERVISOR (consultora):
+ * auditoría, debug, actualizaciones, módulos de la instalación ni nombrar a otros
+ * supervisores internos. Se guarda en RIP_PERMISOSMODULOS como un módulo más.
+ */
+export const PERMISO_SUPERVISOR_INTERNO = 'supervisor-interno';
+/** El Cierre de Caja como módulo que se activa o desactiva por instalación. */
+export const MODULO_CAJAS = 'cajas';
+/**
+ * Módulos exclusivos de algunos grupos económicos: llegan DESACTIVADOS en cada
+ * instalación hasta que el SUPERVISOR los activa (los demás vienen activos). Al
+ * programar un módulo para un solo cliente, agregue aquí su id.
+ */
+export const MODULOS_EXCLUSIVOS = new Set([]);
+/** Lo que se activa por instalación (grupo económico): el cierre y cada reporte. */
+export const MODULOS_ACTIVABLES = [
+    { id: MODULO_CAJAS, nombre: 'Cierre de Caja', grupo: 'Cierre de Caja' },
+    ...MODULOS,
+];
+const IDS = new Set([...MODULOS.map((m) => m.id), PERMISO_CONFIG_CAJAS, PERMISO_SUPERVISOR_INTERNO]);
+/** Id asignable a un usuario: un reporte de `MODULOS`, `PERMISO_CONFIG_CAJAS` o `PERMISO_SUPERVISOR_INTERNO`. */
 export function esModuloValido(id) {
     return IDS.has(id);
 }

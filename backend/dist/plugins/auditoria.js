@@ -27,6 +27,10 @@ const REGLAS = {
     'DELETE /api/cajas/forma-pago': { accion: () => 'Eliminar forma de pago' },
     'PUT /api/config/cuentas': { accion: () => 'Configuración del cierre' },
     'PUT /api/config/permisos': { accion: () => 'Permisos de usuario' },
+    'PUT /api/config/modulos-activos': {
+        accion: (_b, _q, r) => (r && Array.isArray(r.cambios) && r.cambios.length === 0 ? null : 'Módulos de la instalación'),
+        detalle: () => null,
+    },
     // Formas de pago del asiento: el detalle son los `cambios` (antes → después) que devuelve la ruta.
     'PUT /api/config/formas-pago/relaciones': { accion: (_b, _q, r) => (r && Array.isArray(r.cambios) && r.cambios.length === 0 ? null : 'Formas de pago del asiento'), detalle: () => null },
     'POST /api/config/formas-pago/catalogo': { accion: () => 'Nombre de forma de pago (nuevo)', detalle: (b) => ({ descripcion: b?.descripcion }) },

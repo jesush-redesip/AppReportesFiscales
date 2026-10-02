@@ -10,6 +10,9 @@ export interface ReporteLink {
 /** Acceso a Cierre de Caja › Configuración. Mismo id que `PERMISO_CONFIG_CAJAS` del backend. */
 export const PERMISO_CONFIG_CAJAS = 'cajas-configuracion';
 
+/** Supervisor interno del cliente. Mismo id que `PERMISO_SUPERVISOR_INTERNO` del backend. */
+export const PERMISO_SUPERVISOR_INTERNO = 'supervisor-interno';
+
 export interface ReporteGroup {
   id: string;
   label: string;
@@ -84,11 +87,12 @@ export function gruposVisibles(
 ): ReporteGroup[] {
   return REPORT_GROUPS.map((g) => {
     if (g.permiso) {
-      if (!permisos[g.permiso]) return null;
-      return {
-        ...g,
-        reportes: g.reportes.filter((r) => !r.permisoModulo || modulos.includes(r.permisoModulo)),
-      };
+      // Sin la bandera solo quedan los sub-permisos que el usuario tenga por sí mismos
+      // (el supervisor interno configura el cierre sin necesitar "Acceso al módulo").
+      const reportes = g.reportes.filter((r) =>
+        r.permisoModulo ? modulos.includes(r.permisoModulo) : permisos[g.permiso!],
+      );
+      return reportes.length > 0 ? { ...g, reportes } : null;
     }
     const reportes = g.reportes.filter((r) => modulos.includes(r.path.replace(/^\//, '')));
     return reportes.length > 0 ? { ...g, reportes } : null;
