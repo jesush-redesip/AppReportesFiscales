@@ -27,6 +27,10 @@ los clientes la ven en **Actualizaciones** y la descargan como zip.
    Después ejecute el script otra vez.
 4. Abra `http://localhost:3000` en ese equipo, o `http://<ip-del-servidor>:3000` desde las demás PC.
 
+Es **un solo servicio**: el backend sirve también el frontend, así que no hay que instalar nada aparte para el frontend.
+
+**Alternativa sin PowerShell:** con `backend\.env` ya completo, ejecute `scripts\crear-servicio-manual.cmd` como Administrador (clic derecho → Ejecutar como administrador). Crea el mismo servicio con los mismos datos, pero no genera el `.env` ni abre el firewall.
+
 ## Publicar una versión nueva (desarrollo)
 Con los cambios hechos y probados, en la carpeta del proyecto ejecute:
 ```

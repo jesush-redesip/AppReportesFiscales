@@ -3,6 +3,12 @@
 Cada versión publicada con `scripts/publicar.ps1` agrega aquí su sección. Lo que esté
 entre la versión instalada y la nueva se muestra en la pantalla Actualizaciones.
 
+## 1.0.3 - 2026-10-02
+- Retenciones de IVA: la vista previa muestra los totales
+- Retenciones ISLR: el codigo de proveedor sin decimales y sin sumar, y el % de retencion sin sumar
+- Resumen IGTF: numero de transacciones sin decimales
+- Nuevo scripts\crear-servicio-manual.cmd para crear el servicio a mano con NSSM
+
 ## 1.0.2 - 2026-10-01
 - Menu lateral que se muestra u oculta (boton del encabezado o Ctrl+B)
 - El instalador genera JWT_SECRET automaticamente

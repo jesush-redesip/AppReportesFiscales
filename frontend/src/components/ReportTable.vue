@@ -12,8 +12,15 @@ const props = withDefaults(
     textColumns?: string[];
     /** Etiquetas propias de esta vista, por nombre técnico; ganan sobre `lib/columnas`. */
     labels?: Record<string, string>;
+    /** Montos que el SP devuelve como texto ("171988.99", p. ej. el formato del TXT del
+     * SENIAT): se muestran y se suman como números. */
+    numericColumns?: string[];
+    /** Cantidades enteras (se suman, pero sin decimales). */
+    integerColumns?: string[];
+    /** Numéricas que no se suman en esta vista (porcentajes, códigos...). */
+    noTotalColumns?: string[];
   }>(),
-  { textColumns: () => [], labels: () => ({}) },
+  { textColumns: () => [], labels: () => ({}), numericColumns: () => [], integerColumns: () => [], noTotalColumns: () => [] },
 );
 
 /** Solo presentación: las filas siguen indexadas por el nombre técnico de SQL. */
@@ -30,14 +37,28 @@ const esTexto = (col: string) => TEXTO_SIEMPRE.includes(col) || props.textColumn
 /** Numéricas que no tiene sentido sumar: porcentajes y costo unitario. */
 const NO_TOTALIZAR = new Set(['PORCRETENCION', 'ALICUOTA', 'COSTO']);
 
+const noTotalizar = (col: string) => NO_TOTALIZAR.has(col) || props.noTotalColumns.includes(col);
+
+/** Valor numérico de la celda: número, o texto numérico en las columnas `numericColumns`. */
+function aNumero(col: string, value: unknown): number | null {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string' && props.numericColumns.includes(col)) {
+    const t = value.trim();
+    if (/^-?\d+(\.\d+)?$/.test(t)) return Number(t);
+  }
+  return null;
+}
+
 function isNumeric(col: string, value: unknown): boolean {
-  return typeof value === 'number' && !esTexto(col);
+  return aNumero(col, value) !== null && !esTexto(col);
 }
 
 function formatValue(col: string, value: unknown): string {
   if (value === null || value === undefined) return '';
-  if (typeof value === 'number' && !esTexto(col)) {
-    return value.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const n = esTexto(col) ? null : aNumero(col, value);
+  if (n !== null) {
+    const decimales = props.integerColumns.includes(col) ? 0 : 2;
+    return n.toLocaleString('es-VE', { minimumFractionDigits: decimales, maximumFractionDigits: decimales });
   }
   return String(value);
 }
@@ -68,12 +89,12 @@ const hayFiltro = computed(() => filasFiltradas.value.length !== props.rows.leng
 const totales = computed(() => {
   const suma: Record<string, number> = {};
   for (const { col } of columnasVisibles.value) {
-    if (esTexto(col) || NO_TOTALIZAR.has(col)) continue;
+    if (esTexto(col) || noTotalizar(col)) continue;
     let total = 0;
     let esMonto = false;
     for (const r of filasFiltradas.value) {
-      const v = r[col];
-      if (typeof v === 'number') {
+      const v = aNumero(col, r[col]);
+      if (v !== null) {
         total += v;
         esMonto = true;
       }

@@ -38,7 +38,11 @@ function onDescargar() {
         </button>
       </div>
       <p v-if="descargaError" class="error">{{ descargaError }}</p>
-      <ReportTable :columns="previewData.columns" :rows="previewData.rows" />
+      <ReportTable
+        :columns="previewData.columns"
+        :rows="previewData.rows"
+        :numeric-columns="['MONTO_DOCUMENTO', 'BASE_IMPONIBLE', 'IVARETENIDO', 'EXENTO']"
+      />
     </template>
   </section>
 </template>

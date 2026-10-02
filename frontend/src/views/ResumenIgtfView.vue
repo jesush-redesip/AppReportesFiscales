@@ -38,7 +38,7 @@ function onDescargar() {
         </button>
       </div>
       <p v-if="descargaError" class="error">{{ descargaError }}</p>
-      <ReportTable :columns="previewData.columns" :rows="previewData.rows" />
+      <ReportTable :columns="previewData.columns" :rows="previewData.rows" :integer-columns="['Transacciones']" />
     </template>
   </section>
 </template>
