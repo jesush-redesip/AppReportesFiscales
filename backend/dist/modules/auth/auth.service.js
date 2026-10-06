@@ -31,23 +31,44 @@ export async function selectEmpresa(preAuthToken, codEmpresa) {
     }
     if (payload.purpose !== 'select-empresa')
         throw new LoginError('Token inválido.');
-    const empresas = await repo.getEmpresasForUsuario(payload.codUsuario);
+    return emitirSesion(payload.codUsuario, payload.usuario, codEmpresa);
+}
+/** Sesión para una empresa a la que el usuario tiene acceso (EMPRESASUSUARIO). */
+async function emitirSesion(codUsuario, usuario, codEmpresa) {
+    const empresas = await repo.getEmpresasForUsuario(codUsuario);
     const empresa = empresas.find((e) => e.codEmpresa === codEmpresa);
     if (!empresa)
         throw new LoginError('No tiene acceso a esa empresa.');
     const sessionPayload = {
         purpose: 'session',
-        codUsuario: payload.codUsuario,
-        usuario: payload.usuario,
+        codUsuario,
+        usuario,
         codEmpresa: empresa.codEmpresa,
         bd: empresa.bd,
     };
     const token = jwt.sign(sessionPayload, env.jwtSecret, { expiresIn: '8h' });
-    const acceso = await accesoEfectivo(payload.codUsuario);
+    const acceso = await accesoEfectivo(codUsuario);
     // El SUPERVISOR también ve solo los módulos que tenga asignados. Su administración
     // (Permisos de Usuario, Auditoría, Debug) no depende de módulos, así que nunca puede
     // quedarse sin acceso a la pantalla donde se los vuelve a asignar.
-    return { token, usuario: payload.usuario, codUsuario: payload.codUsuario, empresa, ...acceso };
+    return { token, usuario, codUsuario, empresa, ...acceso };
+}
+/** Empresas a las que puede pasar el usuario de la sesión (sin la base de datos: no hace falta en el menú). */
+export async function empresasDeSesion(sesion) {
+    const empresas = await repo.getEmpresasForUsuario(sesion.codUsuario);
+    return empresas
+        .map((e) => ({ codEmpresa: e.codEmpresa, titulo: e.titulo, actual: e.codEmpresa === sesion.codEmpresa }))
+        .sort((a, b) => a.titulo.localeCompare(b.titulo, 'es'));
+}
+/**
+ * Cambiar de empresa sin cerrar sesión: el token de la sesión fija la base de datos, así
+ * que se emite uno nuevo para la empresa elegida. Se revalida que el usuario siga
+ * habilitado y tenga acceso a esa empresa, como en el login.
+ */
+export async function cambiarEmpresa(sesion, codEmpresa) {
+    if (!(await repo.usuarioHabilitado(sesion.codUsuario)))
+        throw new LoginError('El usuario está deshabilitado.');
+    return emitirSesion(sesion.codUsuario, sesion.usuario, codEmpresa);
 }
 export function verifySessionToken(token) {
     const payload = jwt.verify(token, env.jwtSecret);

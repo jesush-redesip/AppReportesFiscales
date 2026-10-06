@@ -18,6 +18,11 @@ const REGLAS = {
         accion: (_b, _q, r) => (r && 'token' in r ? 'Inicio de sesión' : 'Inicio de sesión fallido'),
         detalle: (b) => ({ codEmpresa: b?.codEmpresa }),
     },
+    // Queda con la empresa de la sesión (la de origen); el detalle dice a cuál pasó.
+    'POST /api/auth/cambiar-empresa': {
+        accion: () => 'Cambio de empresa',
+        detalle: (b) => ({ haciaCodEmpresa: b?.codEmpresa }),
+    },
     'POST /api/cajas/contabilizar': { accion: (b) => TIPOS_CONTABILIZAR[String(b?.tipo)] ?? 'Contabilizar' },
     'POST /api/cajas/descontabilizar': { accion: () => 'Descontabilizar cierre' },
     'POST /api/cajas/descontabilizar-deposito': { accion: () => 'Descontabilizar depósito' },

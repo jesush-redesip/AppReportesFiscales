@@ -3,6 +3,13 @@
 Cada versión publicada con `scripts/publicar.ps1` agrega aquí su sección. Lo que esté
 entre la versión instalada y la nueva se muestra en la pantalla Actualizaciones.
 
+## 1.0.6 - 2026-10-06
+- Cambiar de empresa sin cerrar sesion: clic en el nombre de la empresa de la barra superior
+- Modo oscuro y claro (sigue a Windows hasta que el usuario elige)
+- Inicio de sesion: boton para ver la clave y aviso de Bloq Mayus
+- Leyenda de derechos reservados y version en el pie y en el inicio de sesion
+- Barra superior mas compacta en laptops e iconos nuevos (engranaje para permisos, sol/luna para el tema)
+
 ## 1.0.5 - 2026-10-06
 - Corrige la caida del servicio al descargar cualquier Excel
 - Los Excel se descargan con el nombre del modulo y el rango de fechas

@@ -26,6 +26,16 @@ export async function verifyPasswordOnly(password) {
         bloqueado: String(row.BLOQUEADO ?? '').trim().toUpperCase() === 'T',
     };
 }
+/** Para cambiar de empresa sin volver a pedir la contraseña: el usuario debe seguir
+ * existiendo y no estar bloqueado (pudo bloquearse después de iniciar sesión). */
+export async function usuarioHabilitado(codUsuario) {
+    await generalPoolConnect;
+    const request = generalPool.request();
+    request.input('CODUSUARIO', sql.Int, codUsuario);
+    const result = await request.query('SELECT BLOQUEADO FROM dbo.USUARIOS WHERE CODUSUARIO = @CODUSUARIO');
+    const row = result.recordset[0];
+    return Boolean(row) && String(row.BLOQUEADO ?? '').trim().toUpperCase() !== 'T';
+}
 /** Mirrors `login.Empresa.getEmpresas(int)` — companies this user is authorized for. */
 export async function getEmpresasForUsuario(codUsuario) {
     await generalPoolConnect;

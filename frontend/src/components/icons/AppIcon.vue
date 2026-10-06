@@ -15,7 +15,11 @@ export type IconName =
   | 'close'
   | 'check'
   | 'download'
-  | 'menu';
+  | 'menu'
+  | 'sun'
+  | 'moon'
+  | 'eye'
+  | 'eye-off';
 
 defineProps<{ name: IconName; size?: number }>();
 </script>
@@ -74,6 +78,21 @@ defineProps<{ name: IconName; size?: number }>();
       <rect x="4.5" y="10.5" width="15" height="10" rx="1.6" />
       <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
     </template>
+    <template v-else-if="name === 'sun'">
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4" />
+    </template>
+    <template v-else-if="name === 'moon'">
+      <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />
+    </template>
+    <template v-else-if="name === 'eye'">
+      <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />
+      <circle cx="12" cy="12" r="3" />
+    </template>
+    <template v-else-if="name === 'eye-off'">
+      <path d="M10.6 5.6A10 10 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-2.7 3.6M6.3 6.4A16 16 0 0 0 2.5 12S6 18.5 12 18.5a9.6 9.6 0 0 0 5.2-1.5" />
+      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2M3 3l18 18" />
+    </template>
     <template v-else-if="name === 'menu'">
       <path d="M4 6.5h16M4 12h16M4 17.5h16" />
     </template>
@@ -86,10 +105,11 @@ defineProps<{ name: IconName; size?: number }>();
       <path d="M3.5 9.5h17M3.5 14.5h17M9 4.5v15M15 4.5v15" />
     </template>
     <template v-else-if="name === 'settings'">
-      <circle cx="12" cy="12" r="3" />
+      <!-- Engranaje (antes era un círculo con rayos y se confundía con un sol). -->
       <path
-        d="M12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.1 5.9l-1.55 1.55M7.45 16.55 5.9 18.1M18.1 18.1l-1.55-1.55M7.45 7.45 5.9 5.9"
+        d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
       />
+      <circle cx="12" cy="12" r="3" />
     </template>
     <template v-else-if="name === 'close'">
       <path d="M6 6l12 12M18 6 6 18" />

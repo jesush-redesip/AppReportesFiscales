@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router';
 import { api } from '../lib/api';
 import { useAuthStore, type EmpresaGeneral, type PermisosCaja } from '../stores/auth.store';
 import AppIcon from '../components/icons/AppIcon.vue';
+import AppFooter from '../components/layout/AppFooter.vue';
+import TemaToggle from '../components/layout/TemaToggle.vue';
 
 interface PasswordLoginResponse {
   preAuthToken: string;
@@ -24,6 +26,14 @@ type Step = 'password' | 'empresa';
 
 const step = ref<Step>('password');
 const password = ref('');
+/** Ver lo que se escribió, para comprobar que la clave está bien escrita. */
+const verClave = ref(false);
+/** Bloq Mayús activado: la causa más común de una clave "incorrecta". */
+const mayusculas = ref(false);
+
+function revisarMayusculas(e: KeyboardEvent) {
+  if (typeof e.getModifierState === 'function') mayusculas.value = e.getModifierState('CapsLock');
+}
 const loading = ref(false);
 const error = ref<string | null>(null);
 
@@ -79,12 +89,14 @@ async function onSubmitEmpresa() {
 function volver() {
   step.value = 'password';
   password.value = '';
+  verClave.value = false;
   error.value = null;
 }
 </script>
 
 <template>
   <section class="login-page">
+    <div class="tema-esquina"><TemaToggle /></div>
     <div class="login-card">
       <div class="brand-mark" aria-hidden="true">
         <AppIcon name="table" :size="22" />
@@ -97,8 +109,30 @@ function volver() {
           <label>Contraseña</label>
           <div class="input-icon">
             <AppIcon name="lock" :size="16" />
-            <input v-model="password" type="password" required autocomplete="current-password" autofocus />
+            <input
+              v-model="password"
+              :type="verClave ? 'text' : 'password'"
+              required
+              autocomplete="current-password"
+              autocapitalize="off"
+              autocorrect="off"
+              spellcheck="false"
+              autofocus
+              @keydown="revisarMayusculas"
+              @keyup="revisarMayusculas"
+            />
+            <button
+              type="button"
+              class="ver-clave"
+              :aria-pressed="verClave"
+              :aria-label="verClave ? 'Ocultar la contraseña' : 'Mostrar la contraseña'"
+              :title="verClave ? 'Ocultar la contraseña' : 'Mostrar la contraseña'"
+              @click="verClave = !verClave"
+            >
+              <AppIcon :name="verClave ? 'eye-off' : 'eye'" :size="16" />
+            </button>
           </div>
+          <p v-if="mayusculas" class="aviso-mayus" role="status">Bloq Mayús está activado.</p>
         </div>
         <button type="submit" :disabled="loading">{{ loading ? 'Verificando...' : 'Ingresar' }}</button>
         <p v-if="error" class="error">{{ error }}</p>
@@ -124,13 +158,16 @@ function volver() {
         <p v-if="error" class="error">{{ error }}</p>
       </form>
     </div>
+    <AppFooter variante="login" />
   </section>
 </template>
 
 <style scoped>
 .login-page {
+  position: relative;
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: var(--space-5);
@@ -199,6 +236,39 @@ label {
 .input-icon input {
   width: 100%;
   padding-left: 2.15rem;
+  padding-right: 2.6rem;
+}
+.ver-clave {
+  position: absolute;
+  right: 0.3rem;
+  width: 2rem;
+  height: 1.8rem;
+  padding: 0;
+  background: transparent;
+  color: var(--text-faint);
+}
+.ver-clave:hover:not(:disabled) {
+  background: var(--bg-subtle);
+  color: var(--text);
+}
+.ver-clave[aria-pressed='true'] {
+  color: var(--color-brand-darker);
+}
+/* El ícono del candado es decorativo (pointer-events: none); el del ojo es un botón. */
+.ver-clave svg {
+  position: static;
+  pointer-events: auto;
+}
+.aviso-mayus {
+  margin: 0.2rem 0 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-error);
+}
+.tema-esquina {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
 }
 .saludo {
   margin: 0;

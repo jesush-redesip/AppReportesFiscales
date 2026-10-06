@@ -35,6 +35,19 @@ const trail = computed(() => {
   align-items: center;
   font-size: 0.82rem;
   color: var(--text-muted);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* Si no cabe, se recorta con "…" en vez de partirse en dos líneas. */
+.breadcrumb > * {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.breadcrumb > .sep {
+  flex-shrink: 0;
 }
 .crumb-link {
   color: var(--text-muted);

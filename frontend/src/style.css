@@ -57,6 +57,37 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Modo oscuro: solo se redefinen los tokens; todos los componentes los usan. El atributo
+   lo pone index.html antes de dibujar (preferencia guardada o la del sistema) y lo
+   cambia el botón de tema (composables/useTema.ts). --color-white sigue siendo blanco:
+   es el texto sobre el verde de la marca. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --color-brand-dark: #79a822;
+  --color-brand-darker: #a9d65a;
+  --color-brand-bg: rgba(134, 187, 37, 0.14);
+  --color-brand-bg-strong: rgba(134, 187, 37, 0.24);
+
+  --bg: #17191a;
+  --bg-subtle: #1f2223;
+  --bg-sidebar: #1a1c1d;
+  --bg-elevated: #202325;
+  --text: #e8eae4;
+  --text-muted: #b4b7ae;
+  --text-faint: #858980;
+  --border: #303432;
+  --border-strong: #41463f;
+
+  --color-error: #f0776a;
+  --color-error-bg: rgba(240, 119, 106, 0.12);
+  --color-success: #62c873;
+  --color-success-bg: rgba(98, 200, 115, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
 * {
   box-sizing: border-box;
 }

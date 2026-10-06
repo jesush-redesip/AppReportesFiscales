@@ -4,6 +4,9 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from './stores/auth.store';
 import Sidebar from './components/layout/Sidebar.vue';
 import Breadcrumb from './components/layout/Breadcrumb.vue';
+import EmpresaSelector from './components/layout/EmpresaSelector.vue';
+import AppFooter from './components/layout/AppFooter.vue';
+import TemaToggle from './components/layout/TemaToggle.vue';
 import AppIcon from './components/icons/AppIcon.vue';
 import ConfiguracionModal from './components/ConfiguracionModal.vue';
 import DebugPanel from './components/DebugPanel.vue';
@@ -96,11 +99,8 @@ function onLogout() {
           <Breadcrumb />
         </div>
         <div class="app-header-user">
-          <span class="empresa" v-if="auth.empresa">
-            <AppIcon name="building" :size="15" />
-            {{ auth.empresa.titulo }}
-          </span>
-          <span class="avatar" aria-hidden="true">{{ iniciales }}</span>
+          <EmpresaSelector />
+          <span class="avatar" :title="auth.usuario ?? ''" aria-hidden="true">{{ iniciales }}</span>
           <span class="usuario">{{ auth.usuario }}</span>
           <!-- Permisos de usuario: administración reservada al SUPERVISOR, así que se
                esconde el punto de entrada en vez de abrir un modal vacío. El backend
@@ -143,15 +143,18 @@ function onLogout() {
           >
             <AppIcon name="settings" :size="15" />
           </button>
-          <button class="secundario" @click="onLogout">
+          <TemaToggle />
+          <button class="secundario" aria-label="Cerrar sesión" title="Cerrar sesión" @click="onLogout">
             <AppIcon name="logout" :size="15" />
-            Cerrar sesión
+            <span class="etiqueta-compacta">Cerrar sesión</span>
           </button>
         </div>
       </header>
       <div class="app-content">
-        <RouterView />
+        <!-- Al cambiar de empresa la pantalla se vuelve a montar: sus datos son de la base anterior. -->
+        <RouterView :key="auth.empresa?.codEmpresa" />
       </div>
+      <AppFooter />
     </div>
     <ConfiguracionModal :open="configuracionAbierta" @close="configuracionAbierta = false" />
     <!-- Solo SUPERVISOR; se muestra mientras el modo debug está encendido. -->
@@ -188,6 +191,8 @@ function onLogout() {
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
+  flex: 1;
+  margin-right: var(--space-3);
 }
 .boton-menu {
   width: 2.1rem;
@@ -201,19 +206,26 @@ function onLogout() {
 .app-header-user {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-3);
   font-size: 0.85rem;
+  flex-shrink: 0;
 }
-.empresa {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  color: var(--text-muted);
-  font-weight: 600;
-  padding: 0.3rem 0.65rem;
-  background: var(--bg-subtle);
-  border-radius: 999px;
-  font-size: 0.8rem;
+/* Ningún texto de la barra se parte en dos líneas. */
+.app-header-user > *,
+.app-header-user button,
+.app-header-user a {
+  white-space: nowrap;
+}
+/* Pantallas de laptop: menos texto en la barra (iniciales en vez del nombre, Cerrar
+   sesión solo con el ícono; ambos conservan el nombre en el tooltip). */
+@media (max-width: 1500px) {
+  .app-header-user .usuario,
+  .etiqueta-compacta {
+    display: none;
+  }
+  .app-header-user {
+    gap: var(--space-2);
+  }
 }
 .avatar {
   width: 30px;
@@ -282,6 +294,14 @@ function onLogout() {
   height: 2.1rem;
   padding: 0 0.85rem;
   font-size: 0.83rem;
+}
+/* Botón cuadrado del tema: sin el relleno lateral de los demás (el ícono quedaba aplastado). */
+.app-header-user .tema-toggle {
+  width: 2.1rem;
+  padding: 0;
+}
+.app-header-user button svg {
+  flex-shrink: 0;
 }
 .app-content {
   flex: 1;

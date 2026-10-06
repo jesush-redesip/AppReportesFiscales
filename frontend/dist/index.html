@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -11,8 +11,17 @@
       rel="stylesheet"
     />
     <title>Reportes Fiscales</title>
-    <script type="module" crossorigin src="/assets/index-Dp9qLb4n.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-BQikfBrh.css">
+    <script>
+      // Tema antes de dibujar (sin destello blanco): la preferencia guardada o la del sistema.
+      (function () {
+        var t = null;
+        try { t = localStorage.getItem('tema'); } catch (e) {}
+        if (t !== 'oscuro' && t !== 'claro') t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'oscuro' : 'claro';
+        document.documentElement.setAttribute('data-theme', t === 'oscuro' ? 'dark' : 'light');
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-uM4jJuje.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BEWzhHJR.css">
   </head>
   <body>
     <div id="app"></div>
