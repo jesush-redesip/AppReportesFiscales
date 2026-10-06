@@ -5,7 +5,7 @@ import { getResumenIgtf } from './resumen-igtf.repository.js';
 export default async function resumenIgtfRoutes(fastify) {
     fastify.get('/api/reportes/resumen-igtf', { schema: { querystring: resumenIgtfQuerySchema } }, async (req, reply) => {
         const buffer = await generarResumenIgtf(req.user.bd, req.query);
-        reply
+        return reply
             .header('Content-Disposition', `attachment; filename="ResumenIGTF_${req.query.desde}_${req.query.hasta}.xlsx"`)
             .type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
             .send(buffer);

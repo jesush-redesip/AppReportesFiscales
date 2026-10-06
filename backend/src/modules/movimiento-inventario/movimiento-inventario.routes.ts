@@ -10,7 +10,7 @@ export default async function movimientoInventarioRoutes(fastify: FastifyInstanc
     { schema: { querystring: movimientoInventarioQuerySchema } },
     async (req, reply) => {
       const buffer = await generarMovimientoInventario(req.user!.bd, req.query);
-      reply
+      return reply
         .header('Content-Disposition', `attachment; filename="MovimientoInventario_${req.query.desde}_${req.query.hasta}.xlsx"`)
         .type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         .send(buffer);

@@ -4,7 +4,7 @@ import * as repo from './libro-venta-isla.repository.js';
 export default async function libroVentaIslaRoutes(fastify) {
     fastify.get('/api/reportes/libro-venta-isla', { schema: { querystring: libroVentaIslaQuerySchema } }, async (req, reply) => {
         const buffer = await generarLibroVentaIsla(req.user.bd, req.query);
-        reply
+        return reply
             .header('Content-Disposition', `attachment; filename="LibroVentaIsla_${req.query.desde}_${req.query.hasta}.xlsx"`)
             .type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
             .send(buffer);

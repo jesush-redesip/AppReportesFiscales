@@ -18,7 +18,7 @@ function onSubmit(filtros: Filtros) {
 
 function onDescargar() {
   if (!ultimosFiltros) return;
-  descargar('/api/reportes/resumen-igtf', ultimosFiltros, 'ResumenIGTF.xlsx').catch(() => {
+  descargar('/api/reportes/resumen-igtf', ultimosFiltros, 'Resumen IGTF').catch(() => {
     // error already captured in `descargaError`
   });
 }

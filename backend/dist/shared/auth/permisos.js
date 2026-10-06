@@ -41,12 +41,11 @@ export function requirePermiso(flag) {
     return async (request, reply) => {
         // Las tres banderas son del Cierre de Caja: si la instalación no lo tiene, nadie pasa.
         if (!(await estaActivo(MODULO_CAJAS))) {
-            reply.status(403).send({ error: 'Forbidden', message: MSJ_CAJAS_INACTIVO });
-            return;
+            return reply.status(403).send({ error: 'Forbidden', message: MSJ_CAJAS_INACTIVO });
         }
         const permisos = await getPermisosUsuario(request.user.codUsuario);
         if (!permisos[FLAG_TO_KEY[flag]]) {
-            reply.status(403).send({ error: 'Forbidden', message: `No tiene el permiso ${flag}.` });
+            return reply.status(403).send({ error: 'Forbidden', message: `No tiene el permiso ${flag}.` });
         }
     };
 }
@@ -127,12 +126,11 @@ export function requireModulo(modulo) {
     return async (request, reply) => {
         const codUsuario = request.user.codUsuario;
         if (!(await estaActivo(modulo))) {
-            reply.status(403).send({ error: 'Forbidden', message: 'Este módulo no está activo en esta instalación.' });
-            return;
+            return reply.status(403).send({ error: 'Forbidden', message: 'Este módulo no está activo en esta instalación.' });
         }
         const modulos = await getModulosUsuario(codUsuario);
         if (!modulos.includes(modulo)) {
-            reply.status(403).send({ error: 'Forbidden', message: 'No tiene acceso a este módulo.' });
+            return reply.status(403).send({ error: 'Forbidden', message: 'No tiene acceso a este módulo.' });
         }
     };
 }
@@ -145,15 +143,14 @@ export function requireModulo(modulo) {
 export async function requireConfiguracionCajas(request, reply) {
     const codUsuario = request.user.codUsuario;
     if (!(await estaActivo(MODULO_CAJAS))) {
-        reply.status(403).send({ error: 'Forbidden', message: MSJ_CAJAS_INACTIVO });
-        return;
+        return reply.status(403).send({ error: 'Forbidden', message: MSJ_CAJAS_INACTIVO });
     }
     const [permisos, modulos] = await Promise.all([getPermisosUsuario(codUsuario), getModulosUsuario(codUsuario)]);
     // El supervisor interno configura el cierre por su rol, sin necesitar los permisos sueltos.
     if (tieneSupervisorInterno(codUsuario, modulos))
         return;
     if (!permisos.visualizarCajas || !modulos.includes(PERMISO_CONFIG_CAJAS)) {
-        reply
+        return reply
             .status(403)
             .send({ error: 'Forbidden', message: 'No tiene acceso a la configuración del Cierre de Caja.' });
     }
@@ -165,7 +162,7 @@ export async function requireConfiguracionCajas(request, reply) {
  */
 export async function requireSupervisor(request, reply) {
     if (!esSupervisor(request.user.codUsuario)) {
-        reply
+        return reply
             .status(403)
             .send({ error: 'Forbidden', message: 'Solo el SUPERVISOR puede acceder a la configuración del sistema.' });
     }
@@ -188,7 +185,7 @@ export async function requireAdminPermisos(request, reply) {
     const codUsuario = request.user.codUsuario;
     if (esSupervisor(codUsuario) || (await esSupervisorInterno(codUsuario)))
         return;
-    reply.status(403).send({ error: 'Forbidden', message: 'Solo el SUPERVISOR o un supervisor interno pueden administrar permisos.' });
+    return reply.status(403).send({ error: 'Forbidden', message: 'Solo el SUPERVISOR o un supervisor interno pueden administrar permisos.' });
 }
 /** Acceso real del usuario, para la sesión del frontend (menú y rutas). */
 export async function accesoEfectivo(codUsuario) {

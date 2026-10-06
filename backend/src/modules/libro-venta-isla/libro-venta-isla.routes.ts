@@ -9,7 +9,7 @@ export default async function libroVentaIslaRoutes(fastify: FastifyInstance) {
     { schema: { querystring: libroVentaIslaQuerySchema } },
     async (req, reply) => {
       const buffer = await generarLibroVentaIsla(req.user!.bd, req.query);
-      reply
+      return reply
         .header('Content-Disposition', `attachment; filename="LibroVentaIsla_${req.query.desde}_${req.query.hasta}.xlsx"`)
         .type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         .send(buffer);

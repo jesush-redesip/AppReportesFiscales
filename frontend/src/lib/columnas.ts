@@ -96,6 +96,14 @@ const ETIQUETAS: Record<string, string> = {
   SUSTRAENDO: 'Sustraendo',
   RETENIDO: 'Monto Retenido',
 
+  // --- ARCV (rip.MR_FORMATO_ARCV) ---
+  DIA: 'Día',
+  MES: 'Mes',
+  ANYO: 'Año',
+  PAGADO: 'Pagado',
+  BASE_ACUM: 'Base Acumulada',
+  RETENIDO_ACUM: 'Retenido Acumulado',
+
   // --- Retenciones IVA (MR_RETENCIONES_IVA) ---
   RIF_CLIENTE: 'RIF Cliente',
   PERIODO: 'Período',

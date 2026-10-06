@@ -18,7 +18,7 @@ function onSubmit(filtros: Filtros) {
 
 function onDescargar() {
   if (!ultimosFiltros) return;
-  descargar('/api/reportes/retenciones-iva', ultimosFiltros, 'RetencionesIVA.xlsx').catch(() => {
+  descargar('/api/reportes/retenciones-iva', ultimosFiltros, 'Retenciones IVA').catch(() => {
     // error already captured in `descargaError`
   });
 }

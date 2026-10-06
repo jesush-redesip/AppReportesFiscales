@@ -5,7 +5,7 @@ import { getMovimientoInventario } from './movimiento-inventario.repository.js';
 export default async function movimientoInventarioRoutes(fastify) {
     fastify.get('/api/reportes/movimiento-inventario', { schema: { querystring: movimientoInventarioQuerySchema } }, async (req, reply) => {
         const buffer = await generarMovimientoInventario(req.user.bd, req.query);
-        reply
+        return reply
             .header('Content-Disposition', `attachment; filename="MovimientoInventario_${req.query.desde}_${req.query.hasta}.xlsx"`)
             .type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
             .send(buffer);

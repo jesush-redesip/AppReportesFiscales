@@ -18,7 +18,7 @@ function onSubmit(filtros: Filtros) {
 
 function onDescargar() {
   if (!ultimosFiltros) return;
-  descargar('/api/reportes/movimiento-inventario', ultimosFiltros, 'MovimientoInventario.xlsx').catch(() => {
+  descargar('/api/reportes/movimiento-inventario', ultimosFiltros, 'Movimiento de Inventario').catch(() => {
     // error already captured in `descargaError`
   });
 }

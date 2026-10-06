@@ -5,7 +5,7 @@ import { getRetencionesIva } from './retenciones-iva.repository.js';
 export default async function retencionesIvaRoutes(fastify) {
     fastify.get('/api/reportes/retenciones-iva', { schema: { querystring: retencionesIvaQuerySchema } }, async (req, reply) => {
         const buffer = await generarRetencionesIva(req.user.bd, req.query);
-        reply
+        return reply
             .header('Content-Disposition', `attachment; filename="RetencionesIVA_${req.query.desde}_${req.query.hasta}.xlsx"`)
             .type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
             .send(buffer);

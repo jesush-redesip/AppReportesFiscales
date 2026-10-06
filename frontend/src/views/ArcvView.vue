@@ -18,7 +18,7 @@ function onSubmit(filtros: Filtros) {
 
 function onDescargar() {
   if (!ultimosFiltros) return;
-  descargar('/api/reportes/arcv', ultimosFiltros, 'ARCV.xlsx').catch(() => {
+  descargar('/api/reportes/arcv', ultimosFiltros, 'ARCV').catch(() => {
     // error already captured in `descargaError`
   });
 }
@@ -38,7 +38,13 @@ function onDescargar() {
         </button>
       </div>
       <p v-if="descargaError" class="error">{{ descargaError }}</p>
-      <ReportTable :columns="previewData.columns" :rows="previewData.rows" />
+      <!-- El año no es un monto; los acumulados ya son totales corridos, sumarlos no tiene sentido. -->
+      <ReportTable
+        :columns="previewData.columns"
+        :rows="previewData.rows"
+        :text-columns="['ANYO']"
+        :no-total-columns="['BASE_ACUM', 'RETENIDO_ACUM']"
+      />
     </template>
     <p class="nota">Nota: el comprobante se genera sin la imagen de firma (pendiente de definir dónde almacenarla).</p>
   </section>

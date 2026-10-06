@@ -15,12 +15,12 @@ async function errorHandlerPlugin(fastify: FastifyInstance) {
     request.log.error({ err: error }, 'Unhandled request error');
 
     if (error instanceof TenantUnavailableError) {
-      reply.status(503).send({ error: 'TenantUnavailable', message: error.message });
+      return reply.status(503).send({ error: 'TenantUnavailable', message: error.message });
       return;
     }
 
     const statusCode = error.statusCode ?? 500;
-    reply.status(statusCode).send({
+    return reply.status(statusCode).send({
       error: statusCode === 500 ? 'Internal Server Error' : error.name,
       message: error.message,
     });

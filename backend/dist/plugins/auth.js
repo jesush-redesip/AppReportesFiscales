@@ -21,14 +21,14 @@ async function authPlugin(fastify) {
         const header = request.headers.authorization;
         const token = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined;
         if (!token) {
-            reply.status(401).send({ error: 'Unauthorized' });
+            return reply.status(401).send({ error: 'Unauthorized' });
             return;
         }
         try {
             request.user = verifySessionToken(token);
         }
         catch {
-            reply.status(401).send({ error: 'Unauthorized', message: 'Token inválido o expirado.' });
+            return reply.status(401).send({ error: 'Unauthorized', message: 'Token inválido o expirado.' });
         }
     });
 }

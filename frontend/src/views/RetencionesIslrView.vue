@@ -18,7 +18,7 @@ function onSubmit(filtros: Filtros) {
 
 function onDescargar() {
   if (!ultimosFiltros) return;
-  descargar('/api/reportes/retenciones-islr', ultimosFiltros, 'RetencionesISLR.xlsx').catch(() => {
+  descargar('/api/reportes/retenciones-islr', ultimosFiltros, 'Retenciones ISLR').catch(() => {
     // error already captured in `descargaError`
   });
 }

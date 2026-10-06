@@ -9,7 +9,7 @@ export default async function retencionesIslrRoutes(fastify: FastifyInstance) {
     { schema: { querystring: retencionesIslrQuerySchema } },
     async (req, reply) => {
       const buffer = await generarRetencionesIslr(req.user!.bd, req.query);
-      reply
+      return reply
         .header('Content-Disposition', `attachment; filename="RetencionesISLR_${req.query.desde}_${req.query.hasta}.xlsx"`)
         .type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         .send(buffer);

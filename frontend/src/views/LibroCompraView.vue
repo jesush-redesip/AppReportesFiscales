@@ -18,7 +18,7 @@ function onSubmit(filtros: Filtros) {
 
 function onDescargar() {
   if (!ultimosFiltros) return;
-  descargar('/api/reportes/libro-compra', ultimosFiltros, 'LibroCompra.xlsx').catch(() => {
+  descargar('/api/reportes/libro-compra', ultimosFiltros, 'Libro de Compra').catch(() => {
     // error already captured in `descargaError`
   });
 }

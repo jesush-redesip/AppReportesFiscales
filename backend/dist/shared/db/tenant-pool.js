@@ -21,10 +21,18 @@ const poolsByDatabase = new Map();
 function firstIfArray(raw) {
     return Array.isArray(raw) ? raw[0] : raw;
 }
+/**
+ * Los valores repetidos que no son el primero se conservan aparte como `NOMBRE__2`,
+ * `NOMBRE__3`... Esas claves no figuran en `columns`, así que la vista previa y los
+ * exportadores genéricos no las muestran; quien las necesite las toma explícitamente
+ * (p. ej. la fecha del comprobante de retención en el Libro de Compra).
+ */
 function normalizeRow(record) {
     const normalized = {};
     for (const [key, value] of Object.entries(record)) {
         normalized[key] = firstIfArray(value);
+        if (Array.isArray(value))
+            value.slice(1).forEach((v, i) => (normalized[`${key}__${i + 2}`] = v));
     }
     return normalized;
 }

@@ -8,6 +8,7 @@ import { reportConfig } from '../../shared/config/report-config.js';
 import * as catalogos from '../catalogos/catalogos.repository.js';
 import * as repo from './libro-compra.repository.js';
 import type { LibroCompraQuery } from './libro-compra.schema.js';
+import type { SpResult } from '../../shared/db/sp-runner.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_PATH = path.join(__dirname, '..', '..', '..', 'templates', 'REPORTE_LIBRO_COMPRA.xlsx');
@@ -23,6 +24,42 @@ const STYLE_LOOP_START = 10; // Java filaInicioExportacion=9 (0-idx) -> exceljs 
 const BORDER_THIN = { style: 'thin' as const };
 const BORDERS_ALL = { top: BORDER_THIN, bottom: BORDER_THIN, left: BORDER_THIN, right: BORDER_THIN };
 const NUM_FORMAT = '#,##0.00';
+
+/** NRO (el correlativo) es un identificador: entero, sin el formato de moneda. */
+const MONEY_MASK = '0' + '1'.repeat(29);
+
+/** Nombres con los que el SP podría traer la fecha del comprobante de retención. */
+const NOMBRES_FECHA_RETENCION = ['FECHARETENCION', 'FECHA_RETENCION', 'FECHARETENCIONIVA', 'FECHA_RETENCION_IVA'];
+const COL_FECHA_RETENCION = '__FECHA_RETENCION';
+
+/**
+ * La plantilla tiene 30 columnas: el bloque "DATOS DE LA RETENCIÓN" es FECHA · NRO
+ * COMPROBANTE · I.V.A. RETENIDO, y después IGTF. `rip.MR_LIBRO_COMPRA` sí calcula la
+ * fecha de la retención, pero con el alias `FECHA`, igual que la fecha de la factura:
+ * el driver junta los dos en uno (llegan 29 columnas) y todo desde el comprobante quedaba
+ * corrido una
+ * columna a la izquierda (el IVA retenido bajo "NRO COMPROBANTE", la base IGTF bajo
+ * "I.V.A. RETENIDO"...). Eso además rompía el resumen del pie, que toma el IVA retenido
+ * de la columna AB, y la máscara de totales (pensada para 30 columnas).
+ *
+ * Se inserta la columna de la fecha justo antes de NUMRETENCIONIVA, con la fecha de la
+ * retención venga como venga (ver abajo), o vacía si no hay retención.
+ */
+function alinearConPlantilla(r: SpResult): SpResult {
+  const mayus = (n: string) => n.toUpperCase();
+  const fechaCol = r.columns.find((c) => NOMBRES_FECHA_RETENCION.includes(mayus(c.name)));
+  const otras = r.columns.filter((c) => c !== fechaCol);
+  const iNum = otras.findIndex((c) => mayus(c.name) === 'NUMRETENCIONIVA');
+  if (iNum < 0) return r;
+  const columns = [...otras.slice(0, iNum), { name: COL_FECHA_RETENCION, sqlType: 'NVarChar' }, ...otras.slice(iNum)];
+  const rows = r.rows.map((row) => {
+    // Con el alias renombrado (script ALTER_MR_LIBRO_COMPRA_FECHARETENCION) llega con su
+    // nombre; si no, es el segundo "FECHA", que tenant-pool conserva como FECHA__2.
+    const v = fechaCol ? row[fechaCol.name] : (row.FECHA__2 ?? null);
+    return { ...row, [COL_FECHA_RETENCION]: v instanceof Date ? formatDdMMyyyy(v) : (v ?? null) };
+  });
+  return { rows, columns };
+}
 
 function isNumericOrFormula(cell: ExcelJS.Cell): boolean {
   return cell.type === ExcelJS.ValueType.Number || cell.type === ExcelJS.ValueType.Formula;
@@ -51,7 +88,7 @@ export async function generarLibroCompra(bd: string, query: LibroCompraQuery): P
   const ffs = formatDdMMyyyy(parseYyyyMMdd(query.hasta));
   sheet.getRow(6).getCell(2).value = `PERIODO IMPOSICION:  ${ffe} al ${ffs}`;
 
-  const { rows, columns } = await repo.getLibroCompra(bd, {
+  const { rows, columns } = alinearConPlantilla(await repo.getLibroCompra(bd, {
     desde: query.desde,
     hasta: query.hasta,
     codEmpresa: query.empresa,
@@ -60,13 +97,14 @@ export async function generarLibroCompra(bd: string, query: LibroCompraQuery): P
     codRetencionConcepto: reportConfig.codRetencionConcepto,
     areaEmpresas: reportConfig.areaEmpresas,
     codAlmacen: query.almacen ?? '',
-  });
+  }));
 
   const { lastRow: nodeLastRow } = exportResultSetToSheet(sheet, rows, columns, {
     startRow: START_ROW,
     showHeader: false,
     totalize: true,
     totalizeMask: TOTALIZE_MASK,
+    moneyMask: MONEY_MASK,
   });
 
   // javaUltRegistro mirrors the Java `iUltRegistro` (POI 0-indexed last written row).
@@ -84,6 +122,7 @@ export async function generarLibroCompra(bd: string, query: LibroCompraQuery): P
       cell.border = BORDERS_ALL;
       cell.font = { bold: esUltimaLinea };
       if (numeric) cell.numFmt = NUM_FORMAT;
+      else if (j === 0 && !esUltimaLinea && isNumericOrFormula(cell)) cell.numFmt = '0';
     }
   }
 

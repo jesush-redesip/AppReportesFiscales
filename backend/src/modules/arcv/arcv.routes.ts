@@ -10,7 +10,7 @@ export default async function arcvRoutes(fastify: FastifyInstance) {
     { schema: { querystring: arcvQuerySchema } },
     async (req, reply) => {
       const buffer = await generarArcv(req.user!.bd, req.query);
-      reply
+      return reply
         .header('Content-Disposition', `attachment; filename="ARCV_${req.query.desde}_${req.query.hasta}.xlsx"`)
         .type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         .send(buffer);

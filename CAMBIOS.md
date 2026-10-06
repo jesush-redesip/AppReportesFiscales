@@ -3,6 +3,13 @@
 Cada versión publicada con `scripts/publicar.ps1` agrega aquí su sección. Lo que esté
 entre la versión instalada y la nueva se muestra en la pantalla Actualizaciones.
 
+## 1.0.5 - 2026-10-06
+- Corrige la caida del servicio al descargar cualquier Excel
+- Los Excel se descargan con el nombre del modulo y el rango de fechas
+- Libro de Venta: contenido centrado, bordes completos en el encabezado y autofiltro en las 40 columnas
+- Libro de Compra: NRO sin decimales, columnas de retencion e IGTF en su lugar, fecha de la retencion y resumen del pie corregido
+- ARCV: encabezados Dia/Mes/Ano, el ano y los acumulados ya no se suman
+
 ## 1.0.4 - 2026-10-02
 - Supervisor interno: el SUPERVISOR puede marcar a un usuario del cliente para que asigne permisos y configure el cierre
 - Modulos de la instalacion: el SUPERVISOR activa o desactiva por grupo economico el Cierre de Caja y cada reporte

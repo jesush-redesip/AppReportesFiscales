@@ -18,7 +18,7 @@ function onSubmit(filtros: Filtros) {
 
 function onDescargar() {
   if (!ultimosFiltros) return;
-  descargar('/api/reportes/libro-venta-isla', ultimosFiltros, 'LibroVentaIsla.xlsx').catch(() => {
+  descargar('/api/reportes/libro-venta-isla', ultimosFiltros, 'Libro de Venta Isla').catch(() => {
     // error already captured in `descargaError`
   });
 }

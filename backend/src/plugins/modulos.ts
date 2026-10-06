@@ -40,22 +40,20 @@ async function modulosPlugin(fastify: FastifyInstance) {
     // Sin excepción para el SUPERVISOR: también respeta los módulos que tenga asignados.
 
     if (!esModuloReporte(modulo)) {
-      reply.status(403).send({
+      return reply.status(403).send({
         error: 'Forbidden',
         message: `El módulo "${modulo}" no está registrado en el catálogo de permisos.`,
       });
-      return;
     }
 
     // Módulo que este grupo económico no tiene (o que el SUPERVISOR desactivó).
     if (!(await estaActivo(modulo))) {
-      reply.status(403).send({ error: 'Forbidden', message: 'Este módulo no está activo en esta instalación.' });
-      return;
+      return reply.status(403).send({ error: 'Forbidden', message: 'Este módulo no está activo en esta instalación.' });
     }
 
     const modulos = await getModulosUsuario(codUsuario);
     if (!modulos.includes(modulo)) {
-      reply.status(403).send({ error: 'Forbidden', message: 'No tiene acceso a este módulo.' });
+      return reply.status(403).send({ error: 'Forbidden', message: 'No tiene acceso a este módulo.' });
     }
   });
 }

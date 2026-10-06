@@ -81,6 +81,8 @@ const HEADER_ALIGNMENT = { horizontal: 'center', vertical: 'middle', wrapText: t
 // columns). The real production header has no fill at all — explicitly clear it rather
 // than inheriting whatever the template happened to have at that cell position.
 const NO_FILL = { type: 'pattern', pattern: 'none' };
+const BORDE_FINO = { style: 'thin' };
+const BORDES_ENCABEZADO = { top: BORDE_FINO, bottom: BORDE_FINO, left: BORDE_FINO, right: BORDE_FINO };
 function styleHeaderCell(cell, text) {
     cell.value = text;
     // A cell fresh off `getCell()` shares its `.style` object reference with every other
@@ -126,6 +128,43 @@ function writeLibroVentaHeader(sheet) {
     }
     for (let col = 19; col <= 40; col++) {
         sheet.getColumn(col).width = 21.44;
+    }
+    // "VENTAS INTERNAS O EXPORTACIONES GRAVADAS" cubre los dos bloques (CONTRIBUYENTES y
+    // NO CONTRIBUYENTES, S-AH). La plantilla lo traía unido solo S-X, del diseño viejo.
+    sheet.unMergeCells(10, 19, 10, 24);
+    styleHeaderCell(sheet.getCell(10, 19), 'VENTAS INTERNAS O EXPORTACIONES GRAVADAS');
+    sheet.mergeCells(10, 19, 10, 34);
+    // Bordes de todo el encabezado de la tabla. La plantilla solo los tenía en las
+    // columnas del diseño viejo (30 columnas): desde la Y, y en las celdas de una sola
+    // fila, quedaban sin borde.
+    const enmarcar = (r1, r2, c1, c2) => {
+        for (let r = r1; r <= r2; r++) {
+            for (let c = c1; c <= c2; c++) {
+                const cell = sheet.getCell(r, c);
+                cell.style = { ...cell.style, border: BORDES_ENCABEZADO };
+            }
+        }
+    };
+    // Columna 38 (LIBRE2): separador en blanco; sin unir mostraba tres franjas con borde.
+    sheet.mergeCells(12, 38, 14, 38);
+    enmarcar(12, 14, 2, 40); // encabezados de columna
+    enmarcar(10, 12, 19, 34); // grupos: VENTAS INTERNAS..., CONTRIBUYENTES / NO CONTRIBUYENTES
+    // El autofiltro de la plantilla llegaba solo hasta la AI (diseño viejo): ahora cubre
+    // las 40 columnas, incluidas IGTF, IVA retenido y código de sucursal.
+    sheet.autoFilter = 'A14:AN14';
+}
+/**
+ * Centra todo el contenido desde el encabezado de la tabla (fila 11) hasta el final:
+ * datos, totales, pie copiado y retenciones de períodos anteriores. La plantilla y el
+ * exportador dejaban la alineación mezclada (celdas sin alinear, otras centradas o a la
+ * izquierda). Conserva el ajuste de texto y el resto del estilo de cada celda.
+ */
+function centrarTabla(sheet, desdeFila) {
+    for (let r = desdeFila; r <= sheet.rowCount; r++) {
+        sheet.getRow(r).eachCell({ includeEmpty: false }, (cell) => {
+            // Objeto de estilo nuevo: las celdas pueden compartir el mismo objeto (ver styleHeaderCell).
+            cell.style = { ...cell.style, alignment: { ...(cell.style.alignment ?? {}), horizontal: 'center', vertical: 'middle' } };
+        });
     }
 }
 export async function generarLibroVenta(bd, query) {
@@ -211,6 +250,7 @@ export async function generarLibroVenta(bd, query) {
     });
     if (auxSheet)
         wb.removeWorksheet(auxSheet.id);
+    centrarTabla(sheet, 11);
     const buffer = await wb.xlsx.writeBuffer();
     return Buffer.from(buffer);
 }

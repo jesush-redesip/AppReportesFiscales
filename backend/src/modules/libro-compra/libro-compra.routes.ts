@@ -11,7 +11,7 @@ export default async function libroCompraRoutes(fastify: FastifyInstance) {
     { schema: { querystring: libroCompraQuerySchema } },
     async (req, reply) => {
       const buffer = await generarLibroCompra(req.user!.bd, req.query);
-      reply
+      return reply
         .header('Content-Disposition', `attachment; filename="LibroCompra_${req.query.desde}_${req.query.hasta}.xlsx"`)
         .type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         .send(buffer);
