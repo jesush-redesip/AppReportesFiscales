@@ -10,6 +10,7 @@
 export const MODULOS = [
     { id: 'libro-venta', nombre: 'Libro de Venta', grupo: 'Ventas' },
     { id: 'libro-venta-isla', nombre: 'Libro de Venta Isla', grupo: 'Ventas' },
+    { id: 'detalle-ventas', nombre: 'Detalle de Ventas', grupo: 'Ventas' },
     { id: 'libro-compra', nombre: 'Libro de Compra', grupo: 'Compras' },
     { id: 'movimiento-inventario', nombre: 'Movimiento de Inventario', grupo: 'Inventario' },
     { id: 'retenciones-iva', nombre: 'Retenciones IVA', grupo: 'Retenciones e Impuestos' },
@@ -39,7 +40,9 @@ export const MODULO_CAJAS = 'cajas';
  * instalación hasta que el SUPERVISOR los activa (los demás vienen activos). Al
  * programar un módulo para un solo cliente, agregue aquí su id.
  */
-export const MODULOS_EXCLUSIVOS = new Set([]);
+export const MODULOS_EXCLUSIVOS = new Set([
+    'detalle-ventas', // tablero de ventas por tienda/día/ticket (venía del PHP reportesicg de algunos clientes)
+]);
 /** Lo que se activa por instalación (grupo económico): el cierre y cada reporte. */
 export const MODULOS_ACTIVABLES = [
     { id: MODULO_CAJAS, nombre: 'Cierre de Caja', grupo: 'Cierre de Caja' },

@@ -19,9 +19,23 @@ const props = withDefaults(
     integerColumns?: string[];
     /** Numéricas que no se suman en esta vista (porcentajes, códigos...). */
     noTotalColumns?: string[];
+    /** Totales ya calculados (p. ej. por el servidor: márgenes y promedios ponderados).
+     * Si se pasan, reemplazan a la suma de las filas. */
+    totalesFijos?: Record<string, unknown> | null;
+    /** Las filas se pueden elegir con clic (emite `seleccionar`). */
+    clicable?: boolean;
   }>(),
-  { textColumns: () => [], labels: () => ({}), numericColumns: () => [], integerColumns: () => [], noTotalColumns: () => [] },
+  {
+    textColumns: () => [],
+    labels: () => ({}),
+    numericColumns: () => [],
+    integerColumns: () => [],
+    noTotalColumns: () => [],
+    totalesFijos: null,
+    clicable: false,
+  },
 );
+const emit = defineEmits<{ seleccionar: [fila: Record<string, unknown>] }>();
 
 /** Solo presentación: las filas siguen indexadas por el nombre técnico de SQL. */
 const columnasVisibles = computed(() =>
@@ -87,6 +101,14 @@ const hayFiltro = computed(() => filasFiltradas.value.length !== props.rows.leng
 
 // --- Totales de todas las filas filtradas (no solo de la página visible) ---
 const totales = computed(() => {
+  if (props.totalesFijos) {
+    const fijos: Record<string, number> = {};
+    for (const { col } of columnasVisibles.value) {
+      const v = aNumero(col, props.totalesFijos[col]);
+      if (v !== null && !esTexto(col)) fijos[col] = v;
+    }
+    return fijos;
+  }
   const suma: Record<string, number> = {};
   for (const { col } of columnasVisibles.value) {
     if (esTexto(col) || noTotalizar(col)) continue;
@@ -179,7 +201,14 @@ const numero = new Intl.NumberFormat('es-VE');
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(row, i) in filasPagina" :key="desde + i">
+            <tr
+              v-for="(row, i) in filasPagina"
+              :key="desde + i"
+              :class="{ clicable }"
+              :tabindex="clicable ? 0 : undefined"
+              @click="clicable && emit('seleccionar', row)"
+              @keydown.enter="clicable && emit('seleccionar', row)"
+            >
               <td v-for="{ col } in columnasVisibles" :key="col" :class="{ numero: isNumeric(col, row[col]) }">
                 {{ formatValue(col, row[col]) }}
               </td>
@@ -368,5 +397,16 @@ tbody tr {
 }
 tbody tr:hover {
   background: var(--bg-subtle);
+}
+tr.clicable {
+  cursor: pointer;
+}
+tr.clicable:hover td,
+tr.clicable:focus-visible td {
+  background: var(--color-brand-bg);
+}
+tr.clicable:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: -2px;
 }
 </style>

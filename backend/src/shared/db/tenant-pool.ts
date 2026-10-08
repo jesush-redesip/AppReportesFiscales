@@ -143,6 +143,23 @@ export async function queryTenantRaw<T = Record<string, unknown>>(
   return (result.recordset ?? []).map((record) => normalizeRow<T>(record as Record<string, unknown>));
 }
 
+/** Como `queryTenantRaw`, pero devuelve TODOS los conjuntos de resultados del lote
+ * (varios SELECT en una sola ida al servidor). */
+export async function queryTenantMulti<T = Record<string, unknown>>(
+  database: string,
+  sqlText: string,
+  params: Record<string, SpParam> = {},
+): Promise<T[][]> {
+  const pool = await getConnectedPool(database);
+  const request = pool.request();
+  for (const [name, { type, value }] of Object.entries(params)) {
+    request.input(name, type() as sql.ISqlType, value);
+  }
+  const result = await request.query(sqlText);
+  const conjuntos = (result.recordsets ?? []) as unknown as Record<string, unknown>[][];
+  return conjuntos.map((rs) => rs.map((record) => normalizeRow<T>(record)));
+}
+
 /**
  * Runs `fn` inside a real SQL Server transaction against `database`, committing on
  * success and rolling back on any thrown error (then rethrowing). Introduced for the

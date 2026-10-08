@@ -45,6 +45,7 @@ export const REPORT_GROUPS: ReporteGroup[] = [
     reportes: [
       { path: '/libro-venta', nombre: 'Libro de Venta' },
       { path: '/libro-venta-isla', nombre: 'Libro de Venta Isla' },
+      { path: '/detalle-ventas', nombre: 'Detalle de Ventas' },
     ],
   },
   {

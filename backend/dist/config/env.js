@@ -1,4 +1,20 @@
-import 'dotenv/config';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import dotenv from 'dotenv';
+// Las credenciales viven FUERA de la carpeta del proyecto: este repositorio está dentro de
+// OneDrive, así que cualquier .env junto al código se sincronizaría a la nube.
+// Ubicación por defecto: ~/.config/aplicativo-web/.env  (ver backend/.env.example).
+// Se puede apuntar a otro archivo con la variable de entorno APLICATIVO_WEB_ENV.
+const rutaEnvExterno = process.env.APLICATIVO_WEB_ENV ??
+    path.join(os.homedir(), '.config', 'aplicativo-web', '.env');
+if (fs.existsSync(rutaEnvExterno)) {
+    dotenv.config({ path: rutaEnvExterno });
+}
+// Respaldo para entornos que todavía tengan un .env junto al proyecto (por ejemplo una
+// instalación como servicio). dotenv nunca sobreescribe variables ya definidas, así que
+// si existe el archivo externo es el que manda.
+dotenv.config();
 function required(name) {
     const value = process.env[name];
     if (!value) {

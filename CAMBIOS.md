@@ -3,6 +3,10 @@
 Cada versión publicada con `scripts/publicar.ps1` agrega aquí su sección. Lo que esté
 entre la versión instalada y la nueva se muestra en la pantalla Actualizaciones.
 
+## 1.0.7 - 2026-10-08
+- Nuevo modulo Detalle de Ventas (exclusivo: se activa en Modulos de la instalacion): ventas por tienda, dia, ticket y lineas, con grafica, moneda Bs/USD y filtros por grupo, promocion, articulo y clasificacion
+- En desarrollo el .env puede vivir fuera de OneDrive (las instalaciones siguen usando backend\.env)
+
 ## 1.0.6 - 2026-10-06
 - Cambiar de empresa sin cerrar sesion: clic en el nombre de la empresa de la barra superior
 - Modo oscuro y claro (sigue a Windows hasta que el usuario elige)

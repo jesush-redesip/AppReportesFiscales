@@ -11,6 +11,7 @@ import ArcvView from '../views/ArcvView.vue';
 import CajasView from '../views/CajasView.vue';
 import CajasConfiguracionView from '../views/CajasConfiguracionView.vue';
 import AuditoriaView from '../views/AuditoriaView.vue';
+import DetalleVentasView from '../views/DetalleVentasView.vue';
 import ActualizacionesView from '../views/ActualizacionesView.vue';
 import LoginView from '../views/LoginView.vue';
 import { useAuthStore } from '../stores/auth.store';
@@ -32,6 +33,7 @@ export const router = createRouter({
     { path: '/cajas', component: CajasView },
     { path: '/cajas/configuracion', component: CajasConfiguracionView },
     { path: '/auditoria', component: AuditoriaView },
+    { path: '/detalle-ventas', component: DetalleVentasView },
     { path: '/actualizaciones', component: ActualizacionesView },
   ],
 });
