@@ -3,6 +3,9 @@
 Cada versión publicada con `scripts/publicar.ps1` agrega aquí su sección. Lo que esté
 entre la versión instalada y la nueva se muestra en la pantalla Actualizaciones.
 
+## 1.0.9 - 2026-10-09
+- Nuevo modulo Pagares (exclusivo, solo consulta): pagares del periodo, vencidos, pagos del periodo y consolidado por empresa y banco, con tabla de amortizacion y Excel
+
 ## 1.0.8 - 2026-10-09
 - Nuevo modulo Detalle de Compras (exclusivo): compras por tienda, proveedor, documento y lineas, con retencion de IVA, IGTF, moneda Bs/USD y filtro por tipo de documento
 - Detalle de Ventas: la consulta pasa a un procedimiento almacenado (mas rapido) y abre en USD por defecto

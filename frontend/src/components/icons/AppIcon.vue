@@ -19,7 +19,8 @@ export type IconName =
   | 'sun'
   | 'moon'
   | 'eye'
-  | 'eye-off';
+  | 'eye-off'
+  | 'bank';
 
 defineProps<{ name: IconName; size?: number }>();
 </script>
@@ -95,6 +96,10 @@ defineProps<{ name: IconName; size?: number }>();
     </template>
     <template v-else-if="name === 'menu'">
       <path d="M4 6.5h16M4 12h16M4 17.5h16" />
+    </template>
+    <template v-else-if="name === 'bank'">
+      <path d="M3.5 9.5 12 4.5l8.5 5" />
+      <path d="M5.5 10v7M10 10v7M14 10v7M18.5 10v7M3.5 19.5h17" />
     </template>
     <template v-else-if="name === 'download'">
       <path d="M12 4v11M7.5 10.5 12 15l4.5-4.5" />

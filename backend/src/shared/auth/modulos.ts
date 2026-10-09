@@ -18,6 +18,7 @@ export const MODULOS = [
   { id: 'retenciones-islr', nombre: 'Retenciones ISLR', grupo: 'Retenciones e Impuestos' },
   { id: 'resumen-igtf', nombre: 'Resumen IGTF', grupo: 'Retenciones e Impuestos' },
   { id: 'arcv', nombre: 'ARCV (Retenciones)', grupo: 'Retenciones e Impuestos' },
+  { id: 'pagares', nombre: 'Pagarés', grupo: 'Finanzas' },
 ] as const;
 
 export type ModuloId = (typeof MODULOS)[number]['id'];
@@ -50,6 +51,7 @@ export const MODULO_CAJAS = 'cajas';
 export const MODULOS_EXCLUSIVOS = new Set<string>([
   'detalle-ventas', // tablero de ventas por tienda/día/ticket (venía del PHP reportesicg de algunos clientes)
   'detalle-compras', // compras por tienda/proveedor/documento
+  'pagares', // préstamos bancarios con pagarés (tablas RIP_PAGARES* del PHP reportesicg)
 ]);
 
 /** Lo que se activa por instalación (grupo económico): el cierre y cada reporte. */

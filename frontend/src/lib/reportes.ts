@@ -74,6 +74,12 @@ export const REPORT_GROUPS: ReporteGroup[] = [
       { path: '/arcv', nombre: 'ARCV (Retenciones)' },
     ],
   },
+  {
+    id: 'finanzas',
+    label: 'Finanzas',
+    icon: 'bank',
+    reportes: [{ path: '/pagares', nombre: 'Pagarés' }],
+  },
 ];
 
 /**
