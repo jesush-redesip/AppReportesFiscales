@@ -27,7 +27,7 @@ async function esquema(bd) {
     if (cache && Date.now() - cache.hora < 10 * 60_000)
         return cache.esquema;
     const filas = await queryTenantRaw(bd, `SELECT T.TABLA, C.name AS COLUMNA
-     FROM (VALUES ('RIP_PAGARESCAB'), ('RIP_PAGARESLIN')) AS T(TABLA)
+     FROM (VALUES ('RIP_PAGARESCAB'), ('RIP_PAGARESLIN'), ('RIP_PAGARESANULADOS')) AS T(TABLA)
      LEFT JOIN sys.columns C ON C.object_id = OBJECT_ID(T.TABLA)`);
     const cab = new Set(filas.filter((f) => f.TABLA === 'RIP_PAGARESCAB' && f.COLUMNA).map((f) => f.COLUMNA.toUpperCase()));
     const lin = new Set(filas.filter((f) => f.TABLA === 'RIP_PAGARESLIN' && f.COLUMNA).map((f) => f.COLUMNA.toUpperCase()));
@@ -39,9 +39,14 @@ async function esquema(bd) {
         fechaContable: lin.has('FECHACONTABLE'),
         fechaContableInteres: lin.has('FECHACONTABLEINTERES'),
         frecuenciaIntereses: cab.has('FRECUENCIAPAGOINTERESES'),
+        anulados: filas.some((f) => f.TABLA === 'RIP_PAGARESANULADOS' && f.COLUMNA),
     };
     esquemas.set(bd, { esquema: e, hora: Date.now() });
     return e;
+}
+/** Después de crear RIP_PAGARESANULADOS. */
+export function olvidarEsquema(bd) {
+    esquemas.delete(bd);
 }
 /** Cuotas normalizadas: montos numéricos y banderas de pago 1/0. */
 function cteLineas(e) {
@@ -55,8 +60,10 @@ function cteLineas(e) {
     FROM RIP_PAGARESLIN WITH (NOLOCK))`;
 }
 /** Cabeceras con el nombre de la empresa contable y los filtros comunes. */
-function cteCabecera(f, params) {
+function cteCabecera(f, params, e) {
     const condiciones = [];
+    if (e.anulados)
+        condiciones.push('NOT EXISTS (SELECT 1 FROM RIP_PAGARESANULADOS AN WHERE AN.CODPAGARES = C.CODPAGARES)');
     const series = [...new Set((f.series ?? []).map((s) => s.trim()).filter(Boolean))].slice(0, 50);
     if (series.length) {
         condiciones.push(`C.EMPRESA COLLATE DATABASE_DEFAULT IN (${series.map((_, i) => `@S${i}`).join(', ')})`);
@@ -73,7 +80,10 @@ function cteCabecera(f, params) {
     return `CB AS (
     SELECT C.CODPAGARES AS COD, CAST(C.PAGARE AS NVARCHAR(40)) AS PAGARE, C.EMPRESA AS SERIE,
            LTRIM(RTRIM(C.CODBANCO)) AS BANCO,
-           COALESCE(NULLIF(LTRIM(RTRIM(EC.DESCRIPCION)), ''), NULLIF(LTRIM(RTRIM(S.DESCRIPCION)), ''), C.EMPRESA) AS EMPRESA,
+           -- GENERAL, la base de gestión y RIP_PAGARESCAB pueden tener intercalaciones distintas.
+           COALESCE(NULLIF(LTRIM(RTRIM(EC.DESCRIPCION)), '') COLLATE DATABASE_DEFAULT,
+                    NULLIF(LTRIM(RTRIM(S.DESCRIPCION)), '') COLLATE DATABASE_DEFAULT,
+                    C.EMPRESA COLLATE DATABASE_DEFAULT) AS EMPRESA,
            C.FECHA, C.PLAZO, C.FRECUENCIAPAGO AS FRECUENCIA,
            CONVERT(DECIMAL(9, 4), ISNULL(C.TASA, 0)) AS TASA,
            CONVERT(DECIMAL(19, 4), ISNULL(C.MONTO, 0)) AS MONTO
@@ -95,9 +105,9 @@ function fechaParam(params, nombre, yyyyMMdd) {
 }
 /** Empresas (agrupadas por empresa contable) y bancos que tienen pagarés. */
 export async function catalogos(bd) {
-    await esquema(bd); // avisa si la empresa no tiene las tablas
+    const e = await esquema(bd); // además avisa si la empresa no tiene las tablas
     const params = {};
-    const filas = await queryTenantRaw(bd, `WITH ${cteCabecera({}, params)}
+    const filas = await queryTenantRaw(bd, `WITH ${cteCabecera({}, params, e)}
      SELECT SERIE, EMPRESA, BANCO, COUNT(*) AS PAGARES FROM CB GROUP BY SERIE, EMPRESA, BANCO`, params);
     const empresas = new Map();
     for (const f of filas) {
@@ -121,7 +131,7 @@ export async function general(bd, f, desde, hasta) {
     const params = {};
     fechaParam(params, 'DESDE', desde);
     fechaParam(params, 'HASTA', hasta);
-    return queryTenantRaw(bd, `WITH ${cteLineas(e)}, ${cteCabecera(f, params)},
+    return queryTenantRaw(bd, `WITH ${cteLineas(e)}, ${cteCabecera(f, params, e)},
      A AS (
        SELECT L.COD,
               SUM(CASE WHEN L.CAPPAG = 0 THEN L.CAP ELSE 0 END) AS SALDO,
@@ -145,7 +155,7 @@ export async function deudas(bd, f, corte) {
     const e = await esquema(bd);
     const params = {};
     fechaParam(params, 'CORTE', corte);
-    return queryTenantRaw(bd, `WITH ${cteLineas(e)}, ${cteCabecera(f, params)},
+    return queryTenantRaw(bd, `WITH ${cteLineas(e)}, ${cteCabecera(f, params, e)},
      A AS (
        SELECT L.COD,
               SUM(CASE WHEN L.CAPPAG = 0 THEN L.CAP ELSE 0 END) AS SALDO
@@ -170,7 +180,7 @@ export async function pagosPeriodo(bd, f, desde, hasta) {
     const params = {};
     fechaParam(params, 'DESDE', desde);
     fechaParam(params, 'HASTA', hasta);
-    return queryTenantRaw(bd, `WITH ${cteLineas(e)}, ${cteCabecera(f, params)}
+    return queryTenantRaw(bd, `WITH ${cteLineas(e)}, ${cteCabecera(f, params, e)}
      SELECT CB.EMPRESA, CB.BANCO, COUNT(DISTINCT CB.COD) AS PAGARES,
             SUM(CASE WHEN L.CAPPAG = 0 THEN L.CAP ELSE 0 END) AS CAPITAL,
             SUM(CASE WHEN L.INTPAG = 0 THEN L.INTE ELSE 0 END) AS INTERESES,
@@ -187,7 +197,7 @@ export async function consolidado(bd, f, porBanco) {
     const e = await esquema(bd);
     const params = {};
     const grupo = porBanco ? 'CB.BANCO' : 'CB.EMPRESA, CB.BANCO';
-    return queryTenantRaw(bd, `WITH ${cteLineas(e)}, ${cteCabecera(f, params)},
+    return queryTenantRaw(bd, `WITH ${cteLineas(e)}, ${cteCabecera(f, params, e)},
      A AS (
        SELECT L.COD,
               SUM(CASE WHEN L.CAPPAG = 0 THEN L.CAP ELSE 0 END) AS CAPITAL,
@@ -210,7 +220,7 @@ export async function detalle(bd, codPagares, corte) {
     const e = await esquema(bd);
     const params = { COD: p(() => sql.Int, codPagares) };
     fechaParam(params, 'CORTE', corte);
-    const cab = await queryTenantRaw(bd, `WITH ${cteCabecera({}, params)}
+    const cab = await queryTenantRaw(bd, `WITH ${cteCabecera({}, params, e)}
      SELECT CB.COD AS CODPAGARES, CB.PAGARE, CB.EMPRESA, CB.BANCO, ${fechaIso('CB.FECHA')} AS FECHA, CB.PLAZO, CB.FRECUENCIA,
             ${e.frecuenciaIntereses ? 'C.FRECUENCIAPAGOINTERESES' : 'NULL'} AS FRECUENCIA_INTERESES, CB.TASA, CB.MONTO
      FROM CB JOIN RIP_PAGARESCAB C WITH (NOLOCK) ON C.CODPAGARES = CB.COD

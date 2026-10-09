@@ -5,6 +5,7 @@ import {
   esModuloValido,
   MODULO_CAJAS,
   PERMISO_CONFIG_CAJAS,
+  PERMISO_PAGARES_GESTION,
   PERMISO_SUPERVISOR_INTERNO,
 } from '../../shared/auth/modulos.js';
 import { CODUSUARIO_SUPERVISOR, getModulosPorUsuario, reemplazarModulosUsuario } from '../../shared/auth/permisos.js';
@@ -109,6 +110,7 @@ export async function updatePermisos(items: Array<Omit<UsuarioPermisos, 'usuario
     const oculto = (m: string) =>
       (esModuloReporte(m) && !activos.has(m)) ||
       (m === PERMISO_CONFIG_CAJAS && !cajasActivo) ||
+      (m === PERMISO_PAGARES_GESTION && !activos.has('pagares')) ||
       (m === PERMISO_SUPERVISOR_INTERNO && (!admin.esSupervisor || item.codUsuario === CODUSUARIO_SUPERVISOR));
     const modulos = [...new Set([...item.modulos.filter((m) => !oculto(m)), ...antes.filter((m) => oculto(m))])].filter(
       // El SUPERVISOR nunca es supervisor interno: ya lo puede todo.
@@ -148,7 +150,10 @@ export async function updatePermisos(items: Array<Omit<UsuarioPermisos, 'usuario
       // eslint-disable-next-line no-await-in-loop
       // Sin acceso al Cierre de Caja, su Configuración no tiene sentido: se descarta en vez
       // de dejar un permiso que reaparecería activo si se rehabilita el cierre.
-      const modulos = item.visualizarCajas ? item.modulos : item.modulos.filter((m) => m !== PERMISO_CONFIG_CAJAS);
+      const modulos = (item.visualizarCajas ? item.modulos : item.modulos.filter((m) => m !== PERMISO_CONFIG_CAJAS)).filter(
+        // Gestionar pagarés sin poder verlos no tiene sentido.
+        (m) => m !== PERMISO_PAGARES_GESTION || item.modulos.includes('pagares'),
+      );
       await reemplazarModulosUsuario(transaction, item.codUsuario, modulos);
     }
     await transaction.commit();

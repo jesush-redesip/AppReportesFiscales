@@ -10,6 +10,9 @@ export interface ReporteLink {
 /** Acceso a Cierre de Caja › Configuración. Mismo id que `PERMISO_CONFIG_CAJAS` del backend. */
 export const PERMISO_CONFIG_CAJAS = 'cajas-configuracion';
 
+/** Pagarés › registrar, pagar, editar y anular. Mismo id que `PERMISO_PAGARES_GESTION` del backend. */
+export const PERMISO_PAGARES_GESTION = 'pagares-gestion';
+
 /** Supervisor interno del cliente. Mismo id que `PERMISO_SUPERVISOR_INTERNO` del backend. */
 export const PERMISO_SUPERVISOR_INTERNO = 'supervisor-interno';
 

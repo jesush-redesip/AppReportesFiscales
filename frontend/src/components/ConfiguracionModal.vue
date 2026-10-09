@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { api } from '../lib/api';
 import { useAuthStore } from '../stores/auth.store';
 import type { ModuloCatalogo, UsuarioPermisos } from '../lib/types';
-import { PERMISO_CONFIG_CAJAS, PERMISO_SUPERVISOR_INTERNO } from '../lib/reportes';
+import { PERMISO_CONFIG_CAJAS, PERMISO_PAGARES_GESTION, PERMISO_SUPERVISOR_INTERNO } from '../lib/reportes';
 import BaseModal from './BaseModal.vue';
 import AppIcon from './icons/AppIcon.vue';
 
@@ -55,7 +55,14 @@ function tieneModulo(u: UsuarioPermisos, id: string) {
 
 function alternarModulo(u: UsuarioPermisos, id: string) {
   u.modulos = tieneModulo(u, id) ? u.modulos.filter((m) => m !== id) : [...u.modulos, id];
+  // Sin ver pagarés no se pueden gestionar.
+  if (id === 'pagares' && !tieneModulo(u, id)) u.modulos = u.modulos.filter((m) => m !== PERMISO_PAGARES_GESTION);
 }
+
+/** Sub-permisos que se muestran debajo de su módulo. */
+const SUBPERMISOS: Record<string, { id: string; nombre: string }> = {
+  pagares: { id: PERMISO_PAGARES_GESTION, nombre: 'Registrar, pagar, editar y anular' },
+};
 
 function alternarGrupo(u: UsuarioPermisos, modulos: ModuloCatalogo[], activar: boolean) {
   const ids = modulos.map((m) => m.id);
@@ -324,14 +331,25 @@ watch(pestana, (p) => {
                     {{ grupoCompleto(usuarioSeleccionado, g.modulos) ? 'quitar todos' : 'todos' }}
                   </button>
                 </div>
-                <label v-for="m in g.modulos" :key="m.id" class="check">
-                  <input
-                    type="checkbox"
-                    :checked="tieneModulo(usuarioSeleccionado, m.id)"
-                    @change="alternarModulo(usuarioSeleccionado, m.id)"
-                  />
-                  {{ m.nombre }}
-                </label>
+                <template v-for="m in g.modulos" :key="m.id">
+                  <label class="check">
+                    <input
+                      type="checkbox"
+                      :checked="tieneModulo(usuarioSeleccionado, m.id)"
+                      @change="alternarModulo(usuarioSeleccionado, m.id)"
+                    />
+                    {{ m.nombre }}
+                  </label>
+                  <label v-if="SUBPERMISOS[m.id]" class="check sangria">
+                    <input
+                      type="checkbox"
+                      :checked="tieneModulo(usuarioSeleccionado, SUBPERMISOS[m.id].id)"
+                      :disabled="!tieneModulo(usuarioSeleccionado, m.id)"
+                      @change="alternarModulo(usuarioSeleccionado, SUBPERMISOS[m.id].id)"
+                    />
+                    {{ SUBPERMISOS[m.id].nombre }}
+                  </label>
+                </template>
               </div>
             </template>
           </div>

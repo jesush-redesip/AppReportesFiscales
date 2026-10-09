@@ -3,6 +3,11 @@
 Cada versión publicada con `scripts/publicar.ps1` agrega aquí su sección. Lo que esté
 entre la versión instalada y la nueva se muestra en la pantalla Actualizaciones.
 
+## 1.1.0 - 2026-10-09
+- Pagares: registrar pagares con tabla de amortizacion (cuota fija o capital fijo, intereses tasa/12 o dias/360), marcar pagos de capital e intereses, editar cuotas, cambiar la tasa y anular (sin asientos: convive con el PHP)
+- Nuevo permiso Pagares > Registrar, pagar, editar y anular
+- Corrige el error de las consultas de Pagares de la version 1.0.9
+
 ## 1.0.9 - 2026-10-09
 - Nuevo modulo Pagares (exclusivo, solo consulta): pagares del periodo, vencidos, pagos del periodo y consolidado por empresa y banco, con tabla de amortizacion y Excel
 

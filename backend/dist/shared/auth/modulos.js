@@ -35,6 +35,11 @@ export const PERMISO_CONFIG_CAJAS = 'cajas-configuracion';
  * supervisores internos. Se guarda en RIP_PERMISOSMODULOS como un módulo más.
  */
 export const PERMISO_SUPERVISOR_INTERNO = 'supervisor-interno';
+/**
+ * Pagarés › registrar, pagar cuotas, editarlas y anular. Sin él, el módulo "pagares" es
+ * solo consulta. Se guarda en RIP_PERMISOSMODULOS y solo vale junto con "pagares".
+ */
+export const PERMISO_PAGARES_GESTION = 'pagares-gestion';
 /** El Cierre de Caja como módulo que se activa o desactiva por instalación. */
 export const MODULO_CAJAS = 'cajas';
 /**
@@ -52,7 +57,7 @@ export const MODULOS_ACTIVABLES = [
     { id: MODULO_CAJAS, nombre: 'Cierre de Caja', grupo: 'Cierre de Caja' },
     ...MODULOS,
 ];
-const IDS = new Set([...MODULOS.map((m) => m.id), PERMISO_CONFIG_CAJAS, PERMISO_SUPERVISOR_INTERNO]);
+const IDS = new Set([...MODULOS.map((m) => m.id), PERMISO_CONFIG_CAJAS, PERMISO_SUPERVISOR_INTERNO, PERMISO_PAGARES_GESTION]);
 /** Id asignable a un usuario: un reporte de `MODULOS`, `PERMISO_CONFIG_CAJAS` o `PERMISO_SUPERVISOR_INTERNO`. */
 export function esModuloValido(id) {
     return IDS.has(id);

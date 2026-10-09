@@ -40,6 +40,8 @@ interface Esquema {
   fechaContable: boolean;
   fechaContableInteres: boolean;
   frecuenciaIntereses: boolean;
+  /** Existe RIP_PAGARESANULADOS (la crea el Aplicativo al anular el primero). */
+  anulados: boolean;
 }
 const esquemas = new Map<string, { esquema: Esquema; hora: number }>();
 
@@ -49,7 +51,7 @@ async function esquema(bd: string): Promise<Esquema> {
   const filas = await queryTenantRaw<{ TABLA: string; COLUMNA: string | null }>(
     bd,
     `SELECT T.TABLA, C.name AS COLUMNA
-     FROM (VALUES ('RIP_PAGARESCAB'), ('RIP_PAGARESLIN')) AS T(TABLA)
+     FROM (VALUES ('RIP_PAGARESCAB'), ('RIP_PAGARESLIN'), ('RIP_PAGARESANULADOS')) AS T(TABLA)
      LEFT JOIN sys.columns C ON C.object_id = OBJECT_ID(T.TABLA)`,
   );
   const cab = new Set(filas.filter((f) => f.TABLA === 'RIP_PAGARESCAB' && f.COLUMNA).map((f) => f.COLUMNA!.toUpperCase()));
@@ -62,9 +64,15 @@ async function esquema(bd: string): Promise<Esquema> {
     fechaContable: lin.has('FECHACONTABLE'),
     fechaContableInteres: lin.has('FECHACONTABLEINTERES'),
     frecuenciaIntereses: cab.has('FRECUENCIAPAGOINTERESES'),
+    anulados: filas.some((f) => f.TABLA === 'RIP_PAGARESANULADOS' && f.COLUMNA),
   };
   esquemas.set(bd, { esquema: e, hora: Date.now() });
   return e;
+}
+
+/** Después de crear RIP_PAGARESANULADOS. */
+export function olvidarEsquema(bd: string) {
+  esquemas.delete(bd);
 }
 
 /** Cuotas normalizadas: montos numéricos y banderas de pago 1/0. */
@@ -80,8 +88,9 @@ function cteLineas(e: Esquema) {
 }
 
 /** Cabeceras con el nombre de la empresa contable y los filtros comunes. */
-function cteCabecera(f: FiltrosPagares, params: Record<string, SpParam>) {
+function cteCabecera(f: FiltrosPagares, params: Record<string, SpParam>, e: Esquema) {
   const condiciones: string[] = [];
+  if (e.anulados) condiciones.push('NOT EXISTS (SELECT 1 FROM RIP_PAGARESANULADOS AN WHERE AN.CODPAGARES = C.CODPAGARES)');
   const series = [...new Set((f.series ?? []).map((s) => s.trim()).filter(Boolean))].slice(0, 50);
   if (series.length) {
     condiciones.push(`C.EMPRESA COLLATE DATABASE_DEFAULT IN (${series.map((_, i) => `@S${i}`).join(', ')})`);
@@ -98,7 +107,10 @@ function cteCabecera(f: FiltrosPagares, params: Record<string, SpParam>) {
   return `CB AS (
     SELECT C.CODPAGARES AS COD, CAST(C.PAGARE AS NVARCHAR(40)) AS PAGARE, C.EMPRESA AS SERIE,
            LTRIM(RTRIM(C.CODBANCO)) AS BANCO,
-           COALESCE(NULLIF(LTRIM(RTRIM(EC.DESCRIPCION)), ''), NULLIF(LTRIM(RTRIM(S.DESCRIPCION)), ''), C.EMPRESA) AS EMPRESA,
+           -- GENERAL, la base de gestión y RIP_PAGARESCAB pueden tener intercalaciones distintas.
+           COALESCE(NULLIF(LTRIM(RTRIM(EC.DESCRIPCION)), '') COLLATE DATABASE_DEFAULT,
+                    NULLIF(LTRIM(RTRIM(S.DESCRIPCION)), '') COLLATE DATABASE_DEFAULT,
+                    C.EMPRESA COLLATE DATABASE_DEFAULT) AS EMPRESA,
            C.FECHA, C.PLAZO, C.FRECUENCIAPAGO AS FRECUENCIA,
            CONVERT(DECIMAL(9, 4), ISNULL(C.TASA, 0)) AS TASA,
            CONVERT(DECIMAL(19, 4), ISNULL(C.MONTO, 0)) AS MONTO
@@ -122,11 +134,11 @@ function fechaParam(params: Record<string, SpParam>, nombre: string, yyyyMMdd: s
 
 /** Empresas (agrupadas por empresa contable) y bancos que tienen pagarés. */
 export async function catalogos(bd: string) {
-  await esquema(bd); // avisa si la empresa no tiene las tablas
+  const e = await esquema(bd); // además avisa si la empresa no tiene las tablas
   const params: Record<string, SpParam> = {};
   const filas = await queryTenantRaw<{ SERIE: string; EMPRESA: string; BANCO: string; PAGARES: number }>(
     bd,
-    `WITH ${cteCabecera({}, params)}
+    `WITH ${cteCabecera({}, params, e)}
      SELECT SERIE, EMPRESA, BANCO, COUNT(*) AS PAGARES FROM CB GROUP BY SERIE, EMPRESA, BANCO`,
     params,
   );
@@ -154,7 +166,7 @@ export async function general(bd: string, f: FiltrosPagares, desde: string, hast
   fechaParam(params, 'HASTA', hasta);
   return queryTenantRaw<Fila>(
     bd,
-    `WITH ${cteLineas(e)}, ${cteCabecera(f, params)},
+    `WITH ${cteLineas(e)}, ${cteCabecera(f, params, e)},
      A AS (
        SELECT L.COD,
               SUM(CASE WHEN L.CAPPAG = 0 THEN L.CAP ELSE 0 END) AS SALDO,
@@ -183,7 +195,7 @@ export async function deudas(bd: string, f: FiltrosPagares, corte: string): Prom
   fechaParam(params, 'CORTE', corte);
   return queryTenantRaw<Fila>(
     bd,
-    `WITH ${cteLineas(e)}, ${cteCabecera(f, params)},
+    `WITH ${cteLineas(e)}, ${cteCabecera(f, params, e)},
      A AS (
        SELECT L.COD,
               SUM(CASE WHEN L.CAPPAG = 0 THEN L.CAP ELSE 0 END) AS SALDO
@@ -213,7 +225,7 @@ export async function pagosPeriodo(bd: string, f: FiltrosPagares, desde: string,
   fechaParam(params, 'HASTA', hasta);
   return queryTenantRaw<Fila>(
     bd,
-    `WITH ${cteLineas(e)}, ${cteCabecera(f, params)}
+    `WITH ${cteLineas(e)}, ${cteCabecera(f, params, e)}
      SELECT CB.EMPRESA, CB.BANCO, COUNT(DISTINCT CB.COD) AS PAGARES,
             SUM(CASE WHEN L.CAPPAG = 0 THEN L.CAP ELSE 0 END) AS CAPITAL,
             SUM(CASE WHEN L.INTPAG = 0 THEN L.INTE ELSE 0 END) AS INTERESES,
@@ -235,7 +247,7 @@ export async function consolidado(bd: string, f: FiltrosPagares, porBanco: boole
   const grupo = porBanco ? 'CB.BANCO' : 'CB.EMPRESA, CB.BANCO';
   return queryTenantRaw<Fila>(
     bd,
-    `WITH ${cteLineas(e)}, ${cteCabecera(f, params)},
+    `WITH ${cteLineas(e)}, ${cteCabecera(f, params, e)},
      A AS (
        SELECT L.COD,
               SUM(CASE WHEN L.CAPPAG = 0 THEN L.CAP ELSE 0 END) AS CAPITAL,
@@ -263,7 +275,7 @@ export async function detalle(bd: string, codPagares: number, corte: string) {
   fechaParam(params, 'CORTE', corte);
   const cab = await queryTenantRaw<Fila>(
     bd,
-    `WITH ${cteCabecera({}, params)}
+    `WITH ${cteCabecera({}, params, e)}
      SELECT CB.COD AS CODPAGARES, CB.PAGARE, CB.EMPRESA, CB.BANCO, ${fechaIso('CB.FECHA')} AS FECHA, CB.PLAZO, CB.FRECUENCIA,
             ${e.frecuenciaIntereses ? 'C.FRECUENCIAPAGOINTERESES' : 'NULL'} AS FRECUENCIA_INTERESES, CB.TASA, CB.MONTO
      FROM CB JOIN RIP_PAGARESCAB C WITH (NOLOCK) ON C.CODPAGARES = CB.COD

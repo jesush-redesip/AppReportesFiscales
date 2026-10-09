@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import sql from 'mssql';
 import { env } from '../../config/env.js';
 /**
@@ -115,6 +116,35 @@ export async function execTenantSP(database, spName, params = {}) {
     const rows = (recordset ?? []).map((record) => normalizeRow(record));
     return { rows, columns };
 }
+/** Simulacro: una transacción por base, compartida por todo lo que corre dentro. */
+const simulacro = new AsyncLocalStorage();
+async function transaccionSimulacro(database) {
+    const abiertas = simulacro.getStore();
+    if (!abiertas)
+        return null;
+    let t = abiertas.get(database);
+    if (!t) {
+        t = new sql.Transaction(await getConnectedPool(database));
+        await t.begin();
+        abiertas.set(database, t);
+    }
+    return t;
+}
+/**
+ * Ejecuta `fn` con TODAS sus consultas (`queryTenantRaw` y `withTenantTransaction`)
+ * dentro de una sola transacción por base que se revierte al final: para probar
+ * operaciones de escritura contra una base real sin dejar cambios. Solo para pruebas.
+ */
+export async function enSimulacro(fn) {
+    const abiertas = new Map();
+    try {
+        return await simulacro.run(abiertas, fn);
+    }
+    finally {
+        for (const t of abiertas.values())
+            await t.rollback();
+    }
+}
 /**
  * Runs a raw parameterized SELECT against a tenant database (as opposed to a stored
  * procedure call). Used for the one-off inline query in LibroVenta that lists
@@ -122,8 +152,8 @@ export async function execTenantSP(database, spName, params = {}) {
  * the legacy app).
  */
 export async function queryTenantRaw(database, sqlText, params = {}) {
-    const pool = await getConnectedPool(database);
-    const request = pool.request();
+    const t = await transaccionSimulacro(database);
+    const request = t ? new sql.Request(t) : (await getConnectedPool(database)).request();
     for (const [name, { type, value }] of Object.entries(params)) {
         request.input(name, type(), value);
     }
@@ -153,6 +183,9 @@ export async function queryTenantMulti(database, sqlText, params = {}) {
  * be executed once).
  */
 export async function withTenantTransaction(database, fn) {
+    const enCurso = await transaccionSimulacro(database);
+    if (enCurso)
+        return fn(() => new sql.Request(enCurso)); // la revierte enSimulacro
     const pool = await getConnectedPool(database);
     const transaction = new sql.Transaction(pool);
     await transaction.begin();

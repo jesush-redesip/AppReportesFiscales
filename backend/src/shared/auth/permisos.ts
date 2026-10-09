@@ -1,7 +1,7 @@
 import sql from 'mssql';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { generalPool, generalPoolConnect } from '../db/general-pool.js';
-import { MODULO_CAJAS, PERMISO_CONFIG_CAJAS, PERMISO_SUPERVISOR_INTERNO, esModuloReporte, type ModuloId } from './modulos.js';
+import { MODULO_CAJAS, PERMISO_CONFIG_CAJAS, PERMISO_PAGARES_GESTION, PERMISO_SUPERVISOR_INTERNO, esModuloReporte, type ModuloId } from './modulos.js';
 import { estaActivo, modulosActivos } from './activacion.js';
 
 const MSJ_CAJAS_INACTIVO = 'El Cierre de Caja no está activo en esta instalación.';
@@ -241,6 +241,7 @@ export async function accesoEfectivo(codUsuario: number): Promise<AccesoEfectivo
   const modulos = asignados.filter((m) => {
     if (esModuloReporte(m)) return activos.has(m);
     if (m === PERMISO_CONFIG_CAJAS) return cajasActivo;
+    if (m === PERMISO_PAGARES_GESTION) return activos.has('pagares') && asignados.includes('pagares');
     return m === PERMISO_SUPERVISOR_INTERNO ? supervisorInterno : true;
   });
   if (supervisorInterno && cajasActivo && !modulos.includes(PERMISO_CONFIG_CAJAS)) modulos.push(PERMISO_CONFIG_CAJAS);

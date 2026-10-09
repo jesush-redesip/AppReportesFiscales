@@ -5,6 +5,10 @@ import { useReporteDownload } from '../composables/useReporteDownload';
 import ReportTable from '../components/ReportTable.vue';
 import BaseModal from '../components/BaseModal.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
+import DetallePagare from '../components/pagares/DetallePagare.vue';
+import RegistrarPagare from '../components/pagares/RegistrarPagare.vue';
+import { useAuthStore } from '../stores/auth.store';
+import { PERMISO_PAGARES_GESTION } from '../lib/reportes';
 
 /**
  * Pagarés (solo consulta): préstamos bancarios de la empresa documentados con pagarés,
@@ -142,37 +146,42 @@ async function descargarExcel() {
   }
 }
 
-// --- Tabla de amortización (ventana) ---
-interface Detalle {
-  pagare: Fila;
-  lineas: Fila[];
-  columnas: Columna[];
-}
-const detalle = ref<{ titulo: string; cod: number; datos: Detalle | null; cargando: boolean; error: string } | null>(null);
+// --- Tabla de amortización (ventana) y gestión ---
+const auth = useAuthStore();
+const puedeGestionar = computed(() => auth.modulos.includes(PERMISO_PAGARES_GESTION));
+const detalle = ref<{ titulo: string; cod: number } | null>(null);
 const corteDetalle = computed(() => yyyyMMdd(pestana.value === 'deudas' ? filtros.corte : iso(new Date())));
+const huboCambios = ref(false);
 
-async function abrirDetalle(fila: Fila) {
+function abrirDetalle(fila: Fila) {
   if (!conDetalle.value) return;
-  const cod = Number(fila.CODPAGARES);
-  detalle.value = { titulo: `Pagaré #${fila.PAGARE} · ${fila.BANCO}`, cod, datos: null, cargando: true, error: '' };
-  try {
-    detalle.value.datos = await api.get<Detalle>(`${BASE}/detalle`, { cod, corte: corteDetalle.value });
-  } catch (e) {
-    detalle.value.error = e instanceof Error ? e.message : 'No se pudo cargar el pagaré.';
-  } finally {
-    detalle.value.cargando = false;
-  }
+  huboCambios.value = false;
+  detalle.value = { titulo: `Pagaré #${fila.PAGARE} · ${fila.BANCO}`, cod: Number(fila.CODPAGARES) };
 }
-const tablaDetalle = computed(() => (detalle.value?.datos ? propsTabla(detalle.value.datos.columnas, detalle.value.datos.lineas) : null));
-const numero = (v: unknown, dec = 2) => Number(v ?? 0).toLocaleString('es-VE', { minimumFractionDigits: dec, maximumFractionDigits: dec });
+function cerrarDetalle() {
+  detalle.value = null;
+  if (huboCambios.value) void consultar();
+}
+function anulado() {
+  detalle.value = null;
+  avisoRegistro.value = 'Pagaré anulado.';
+  void consultar();
+}
 
-async function descargarDetalle() {
-  if (!detalle.value) return;
+const registrando = ref(false);
+const avisoRegistro = ref('');
+async function registrado(r: { codPagares: number; aviso: string | null }) {
+  registrando.value = false;
+  avisoRegistro.value = r.aviso ? `Pagaré registrado. ${r.aviso}` : 'Pagaré registrado.';
+  // Los catálogos pueden traer un banco o empresa nuevos.
   try {
-    await descargar(`${BASE}/detalle/excel`, { cod: detalle.value.cod, corte: corteDetalle.value }, `Pagare ${detalle.value.datos?.pagare.PAGARE ?? ''}`.trim());
-  } catch (e) {
-    detalle.value.error = e instanceof Error ? e.message : 'No se pudo generar el Excel.';
+    const c = await api.get<{ empresas: Empresa[]; bancos: string[] }>(`${BASE}/catalogos`);
+    empresas.value = c.empresas;
+    bancos.value = c.bancos;
+  } catch {
+    /* la consulta siguiente mostrará el error si lo hay */
   }
+  void consultar();
 }
 </script>
 
@@ -183,6 +192,11 @@ async function descargarDetalle() {
       Préstamos bancarios de la empresa documentados con pagarés: cuotas del período, lo vencido sin pagar y la deuda por
       banco. Haga clic en un pagaré para ver su tabla de amortización.
     </p>
+
+    <div v-if="puedeGestionar" class="barra-gestion">
+      <button type="button" @click="(registrando = true), (avisoRegistro = '')">+ Registrar pagaré</button>
+      <span v-if="avisoRegistro" class="exito">{{ avisoRegistro }}</span>
+    </div>
 
     <div class="pestanas" role="tablist">
       <button
@@ -270,35 +284,18 @@ async function descargarDetalle() {
       />
     </template>
 
-    <BaseModal :open="!!detalle" :title="detalle?.titulo ?? ''" ancho="min(1200px, 95vw)" @close="detalle = null">
-      <p v-if="detalle?.cargando" class="estado"><span class="spinner" aria-hidden="true"></span> Cargando…</p>
-      <p v-else-if="detalle?.error" class="error">{{ detalle.error }}</p>
-      <template v-else-if="detalle?.datos && tablaDetalle">
-        <dl class="resumen">
-          <div><dt>Empresa</dt><dd>{{ detalle.datos.pagare.EMPRESA }}</dd></div>
-          <div><dt>Liquidación</dt><dd>{{ ddmmyyyy(detalle.datos.pagare.FECHA) }}</dd></div>
-          <div><dt>Monto</dt><dd>{{ numero(detalle.datos.pagare.MONTO) }}</dd></div>
-          <div><dt>Tasa anual</dt><dd>{{ numero(detalle.datos.pagare.TASA) }} %</dd></div>
-          <div><dt>Plazo</dt><dd>{{ detalle.datos.pagare.PLAZO }} meses</dd></div>
-          <div><dt>Capital</dt><dd>{{ detalle.datos.pagare.FRECUENCIA || '—' }}</dd></div>
-          <div><dt>Intereses</dt><dd>{{ detalle.datos.pagare.FRECUENCIA_INTERESES || '—' }}</dd></div>
-          <div class="acciones-detalle">
-            <button type="button" class="secundario" :disabled="descargando" @click="descargarDetalle">
-              <AppIcon name="download" :size="15" />
-              Excel
-            </button>
-          </div>
-        </dl>
-        <ReportTable
-          :columns="tablaDetalle.columns"
-          :rows="tablaDetalle.rows"
-          :labels="tablaDetalle.labels"
-          :text-columns="tablaDetalle.textColumns"
-          :integer-columns="tablaDetalle.integerColumns"
-          :no-total-columns="tablaDetalle.noTotalColumns"
-        />
-      </template>
+    <BaseModal :open="!!detalle" :title="detalle?.titulo ?? ''" ancho="min(1250px, 96vw)" @close="cerrarDetalle">
+      <DetallePagare
+        v-if="detalle"
+        :key="detalle.cod"
+        :cod="detalle.cod"
+        :corte="corteDetalle"
+        :puede-gestionar="puedeGestionar"
+        @cambio="huboCambios = true"
+        @anulado="anulado"
+      />
     </BaseModal>
+    <RegistrarPagare v-if="registrando" @cerrar="registrando = false" @guardado="registrado" />
   </section>
 </template>
 
@@ -386,25 +383,14 @@ async function descargarDetalle() {
     transform: rotate(360deg);
   }
 }
-.resumen {
+.barra-gestion {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: var(--space-2) var(--space-5);
-  margin: 0 0 var(--space-4);
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
 }
-.resumen dt {
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.resumen dd {
-  margin: 0.15rem 0 0;
-  font-size: 0.92rem;
-}
-.acciones-detalle {
-  margin-left: auto;
+.exito {
+  color: var(--color-success, #2f7d32);
+  font-size: 0.85rem;
 }
 </style>
