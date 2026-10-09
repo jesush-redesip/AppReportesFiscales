@@ -3,6 +3,12 @@
 Cada versión publicada con `scripts/publicar.ps1` agrega aquí su sección. Lo que esté
 entre la versión instalada y la nueva se muestra en la pantalla Actualizaciones.
 
+## 1.0.8 - 2026-10-09
+- Nuevo modulo Detalle de Compras (exclusivo): compras por tienda, proveedor, documento y lineas, con retencion de IVA, IGTF, moneda Bs/USD y filtro por tipo de documento
+- Detalle de Ventas: la consulta pasa a un procedimiento almacenado (mas rapido) y abre en USD por defecto
+- Corrige la conversion de moneda en empresas cuya moneda principal es USD (BIGBEN)
+- Los procedimientos del aplicativo se instalan y actualizan solos, respetando los que el cliente haya modificado
+
 ## 1.0.7 - 2026-10-08
 - Nuevo modulo Detalle de Ventas (exclusivo: se activa en Modulos de la instalacion): ventas por tienda, dia, ticket y lineas, con grafica, moneda Bs/USD y filtros por grupo, promocion, articulo y clasificacion
 - En desarrollo el .env puede vivir fuera de OneDrive (las instalaciones siguen usando backend\.env)

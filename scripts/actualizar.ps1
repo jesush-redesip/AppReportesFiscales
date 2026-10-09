@@ -33,7 +33,7 @@ $log = Join-Path $dirActualizaciones "actualizar-$sello.log"
 Start-Transcript -Path $log -Force | Out-Null
 
 # Lo que se reemplaza (relativo a la raiz). .env, logs y node_modules quedan como estan.
-$ELEMENTOS = @('version.json', 'backend\dist', 'backend\templates', 'backend\package.json', 'backend\package-lock.json', 'backend\.env.example', 'frontend\dist', 'scripts')
+$ELEMENTOS = @('version.json', 'backend\dist', 'backend\templates', 'backend\sql', 'backend\package.json', 'backend\package-lock.json', 'backend\.env.example', 'frontend\dist', 'scripts')
 
 function Leer-Version([string]$raiz) {
   try { return (Get-Content -Raw -Path (Join-Path $raiz 'version.json') | ConvertFrom-Json).version } catch { return '0.0.0' }

@@ -52,7 +52,10 @@ export const REPORT_GROUPS: ReporteGroup[] = [
     id: 'compras',
     label: 'Compras',
     icon: 'cart',
-    reportes: [{ path: '/libro-compra', nombre: 'Libro de Compra' }],
+    reportes: [
+      { path: '/libro-compra', nombre: 'Libro de Compra' },
+      { path: '/detalle-compras', nombre: 'Detalle de Compras' },
+    ],
   },
   {
     id: 'inventario',

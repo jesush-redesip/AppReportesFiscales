@@ -1,23 +1,17 @@
 import sql from 'mssql';
 import { queryTenantMulti, queryTenantRaw } from '../../shared/db/tenant-pool.js';
 import type { SpParam } from '../../shared/db/sp-runner.js';
+import { asegurarProcedimiento, ProcedimientoError } from '../../shared/db/procedimientos.js';
 
 /**
- * Detalle de Ventas: tablero de ventas que se abre por niveles (tienda → día → ticket →
- * líneas). Reemplaza "DETALLES VENTAS" del PHP reportesicg con un solo cálculo para
- * todos los niveles (el PHP calculaba distinto en cada uno y no cuadraba):
+ * Detalle de Ventas: tablero de ventas por niveles (tienda → día → ticket → líneas).
+ * Reemplaza "DETALLES VENTAS" del PHP reportesicg.
  *
- *  - Línea:   MONTO = TOTAL de la línea menos el descuento comercial de la cabecera;
- *             IVA = MONTO × %IVA; COSTO = COSTE × unidades.
- *  - Ticket:  un albarán (NUMSERIE, NUMALBARAN, N). IGTF = TOTALCARGOSDTOS de la cabecera.
- *  - Tienda:  los 2 primeros caracteres de la serie (SERIES.DESCRIPCION); grupo = el 1.º.
- *  - Moneda:  todo se lleva a la moneda elegida como el Libro de Compra: importes del
- *             documento × (1 si ya está en esa moneda, si no FACTORMONEDA × cotización);
- *             el COSTE está en la moneda principal → × cotización de la moneda elegida.
- *  - Se excluyen las series que empiezan por Z (administración), como el PHP.
- *
- * Los filtros por artículo (referencia, clasificación, promoción) se aplican a las
- * líneas: un ticket cuenta si tiene al menos una línea que cumple, y su IGTF entra entero.
+ * La consulta vive en la base de datos, en el procedimiento rip.MR_DETALLE_VENTAS
+ * (script: backend/sql/rip.MR_DETALLE_VENTAS.sql, con el detalle del cálculo). Si una
+ * base no lo tiene, se crea la primera vez que se usa el módulo; si ya existe NO se toca,
+ * así un ajuste hecho para un cliente se respeta (igual que con los rip.MR_* de los
+ * libros). Para reinstalar la versión original, ejecutar ese script en la base.
  */
 
 export interface FiltrosVentas {
@@ -42,51 +36,19 @@ export class DetalleVentasError extends Error {
   }
 }
 
+export type Fila = Record<string, unknown>;
+
 const p = (type: () => unknown, value: unknown): SpParam => ({ type, value });
 
-/** WHERE de líneas + parámetros. La jerarquía se aplica en orden (sección solo con dpto, etc.). */
-function filtrosLineas(f: FiltrosVentas): { where: string; params: Record<string, SpParam> } {
-  const w: string[] = [];
-  const params: Record<string, SpParam> = {
-    DESDE: p(() => sql.Date, aFecha(f.desde)),
-    HASTA: p(() => sql.Date, aFecha(f.hasta)),
-    MONEDA: p(() => sql.Int, f.moneda),
-  };
-  if (f.grupo) {
-    w.push('C.NUMSERIE LIKE @GRUPO + \'%\'');
-    params.GRUPO = p(() => sql.NVarChar(1), f.grupo);
+const PROCEDIMIENTO = 'rip.MR_DETALLE_VENTAS';
+
+async function asegurar(bd: string) {
+  try {
+    await asegurarProcedimiento(bd, PROCEDIMIENTO);
+  } catch (err) {
+    if (err instanceof ProcedimientoError) throw new DetalleVentasError(err.message);
+    throw err;
   }
-  if (f.promocion != null) {
-    w.push(`EXISTS (SELECT 1 FROM ALBVENTALINPROMOCIONES PR WITH (NOLOCK)
-                    WHERE PR.NUMSERIE = L.NUMSERIE AND PR.NUMALBARAN = L.NUMALBARAN AND PR.N = L.N
-                      AND PR.NUMLIN = L.NUMLIN AND PR.IDPROMOCION = @PROMOCION)`);
-    params.PROMOCION = p(() => sql.Int, f.promocion);
-  }
-  const refs = [...new Set((f.referencias ?? []).map((r) => r.trim()).filter(Boolean))].slice(0, 200);
-  if (refs.length) {
-    w.push(`ART.REFPROVEEDOR IN (${refs.map((_, i) => `@REF${i}`).join(', ')})`);
-    refs.forEach((r, i) => (params[`REF${i}`] = p(() => sql.NVarChar(50), r)));
-  }
-  const jerarquia: [keyof FiltrosVentas, string][] = [
-    ['dpto', 'DPTO'],
-    ['seccion', 'SECCION'],
-    ['familia', 'FAMILIA'],
-    ['subfamilia', 'SUBFAMILIA'],
-  ];
-  for (const [k, col] of jerarquia) {
-    if (f[k] == null) break;
-    w.push(`ART.${col} = @${col}`);
-    params[col] = p(() => sql.Int, f[k]);
-  }
-  if (f.marca != null) {
-    w.push('ART.MARCA = @MARCA');
-    params.MARCA = p(() => sql.Int, f.marca);
-    if (f.linea != null) {
-      w.push('ART.LINEA = @LINEA');
-      params.LINEA = p(() => sql.Int, f.linea);
-    }
-  }
-  return { where: w.length ? 'AND ' + w.join('\n      AND ') : '', params };
 }
 
 function aFecha(yyyyMMdd: string): Date {
@@ -95,210 +57,90 @@ function aFecha(yyyyMMdd: string): Date {
   return d;
 }
 
-/**
- * Tickets (albaranes) con sus importes ya convertidos, en la tabla temporal #TIC (se
- * calcula una vez y la usan las filas y los totales). `extra` agrega condiciones sobre la
- * cabecera (tienda, día, ticket). Cotización: una vez por fecha, no por línea.
- */
-function cteTickets(where: string, extra = ''): string {
-  // Por si una consulta anterior falló a mitad en esta conexión del pool.
-  return `
-IF OBJECT_ID('tempdb..#TIC') IS NOT NULL DROP TABLE #TIC;
-IF OBJECT_ID('tempdb..#COT') IS NOT NULL DROP TABLE #COT;
--- Cotización una vez por día: como CTE, SQL Server la recalculaba en cada línea (55 mil
--- llamadas a la función en 9 meses de VELAPARK, ~8 s); en tabla temporal son ~120.
-SELECT F.FECHA, dbo.F_GET_COTIZACION(F.FECHA, @MONEDA) AS COT
-INTO #COT
-FROM (SELECT DISTINCT FECHA FROM ALBVENTACAB WITH (NOLOCK)
-      WHERE FECHA BETWEEN @DESDE AND @HASTA AND NUMSERIE NOT LIKE 'Z%') F;
-WITH LIN AS (
-  SELECT C.NUMSERIE, C.NUMALBARAN, C.N,
-         L.UNIDADESTOTAL AS UNIDADES,
-         L.TOTAL * (1 - ISNULL(C.DTOCOMERCIAL, 0) / 100.0) * FX.FD AS MONTO,
-         L.TOTAL * (1 - ISNULL(C.DTOCOMERCIAL, 0) / 100.0) * ISNULL(L.IVA, 0) / 100.0 * FX.FD AS IVA,
-         ISNULL(L.COSTE, 0) * L.UNIDADESTOTAL * X.COT AS COSTO
-  FROM ALBVENTACAB C WITH (NOLOCK)
-  JOIN ALBVENTALIN L WITH (NOLOCK) ON L.NUMSERIE = C.NUMSERIE AND L.NUMALBARAN = C.NUMALBARAN AND L.N = C.N
-  JOIN ARTICULOS ART WITH (NOLOCK) ON ART.CODARTICULO = L.CODARTICULO
-  JOIN #COT X ON X.FECHA = C.FECHA
-  CROSS APPLY (SELECT CASE WHEN C.CODMONEDA = @MONEDA THEN 1.0 ELSE C.FACTORMONEDA * X.COT END AS FD) FX
-  WHERE C.FECHA BETWEEN @DESDE AND @HASTA
-    AND C.NUMSERIE NOT LIKE 'Z%'
-    ${extra}
-    ${where}
-),
-TIC AS (
-  SELECT C.NUMSERIE, C.NUMALBARAN, C.N, C.FECHA,
-         SUM(LIN.UNIDADES) AS UNIDADES, SUM(LIN.MONTO) AS MONTO, SUM(LIN.IVA) AS IVA, SUM(LIN.COSTO) AS COSTO,
-         MAX(ISNULL(C.TOTALCARGOSDTOS, 0) * CASE WHEN C.CODMONEDA = @MONEDA THEN 1.0 ELSE C.FACTORMONEDA * X.COT END) AS IGTF
-  FROM LIN
-  JOIN ALBVENTACAB C WITH (NOLOCK) ON C.NUMSERIE = LIN.NUMSERIE AND C.NUMALBARAN = LIN.NUMALBARAN AND C.N = LIN.N
-  JOIN #COT X ON X.FECHA = C.FECHA
-  GROUP BY C.NUMSERIE, C.NUMALBARAN, C.N, C.FECHA
-)
-SELECT * INTO #TIC FROM TIC;`;
+type Nivel = 'TIENDAS' | 'DIAS' | 'TICKETS' | 'LINEAS';
+
+/** Llama al procedimiento con los filtros y los parámetros del nivel. Devuelve filas y totales. */
+async function ejecutar(bd: string, nivel: Nivel, f: FiltrosVentas, extra: Record<string, SpParam> = {}): Promise<{ filas: Fila[]; totales: Fila }> {
+  await asegurar(bd);
+  const refs = [...new Set((f.referencias ?? []).map((r) => r.trim()).filter(Boolean))].slice(0, 200);
+  const params: Record<string, SpParam> = {
+    NIVEL: p(() => sql.VarChar(10), nivel),
+    DESDE: p(() => sql.Date, aFecha(f.desde)),
+    HASTA: p(() => sql.Date, aFecha(f.hasta)),
+    MONEDA: p(() => sql.Int, f.moneda),
+    GRUPO: p(() => sql.NVarChar(1), f.grupo ?? null),
+    PROMOCION: p(() => sql.Int, f.promocion ?? null),
+    REFS: p(() => sql.NVarChar(sql.MAX), refs.length ? refs.join(',') : null),
+    DPTO: p(() => sql.Int, f.dpto ?? null),
+    SECCION: p(() => sql.Int, f.seccion ?? null),
+    FAMILIA: p(() => sql.Int, f.familia ?? null),
+    SUBFAMILIA: p(() => sql.Int, f.subfamilia ?? null),
+    MARCA: p(() => sql.Int, f.marca ?? null),
+    LINEA: p(() => sql.Int, f.linea ?? null),
+    ...extra,
+  };
+  const lista = Object.keys(params).map((k) => `@${k} = @${k}`).join(', ');
+  const conjuntos = await queryTenantMulti<Fila>(bd, `EXEC ${PROCEDIMIENTO} ${lista}`, params);
+  return { filas: conjuntos[0] ?? [], totales: conjuntos[1]?.[0] ?? {} };
 }
 
-/** Métricas comunes de un grupo de tickets (tienda o día). Divisiones protegidas contra cero. */
-const METRICAS = `
-  ROUND(SUM(T.MONTO), 2) AS MONTO,
-  ROUND(SUM(T.IVA), 2) AS IVA,
-  ROUND(SUM(T.IGTF), 2) AS IGTF,
-  ROUND(SUM(T.MONTO + T.IVA + T.IGTF), 2) AS TOTAL,
-  ROUND(SUM(T.COSTO), 2) AS COSTO,
-  ROUND(SUM(T.MONTO) - SUM(T.COSTO), 2) AS BENEFICIO,
-  ROUND((SUM(T.MONTO) - SUM(T.COSTO)) * 100.0 / NULLIF(SUM(T.MONTO), 0), 2) AS MARGEN,
-  SUM(T.UNIDADES) AS UNIDADES,
-  COUNT(*) AS TICKETS,
-  ROUND(SUM(T.MONTO + T.IVA + T.IGTF) / NULLIF(COUNT(*), 0), 2) AS PROMEDIO,
-  ROUND(SUM(T.UNIDADES) / NULLIF(COUNT(*), 0), 2) AS UPF,
-  ROUND(SUM(T.MONTO) / NULLIF(SUM(T.UNIDADES), 0), 2) AS MONTO_UNIDAD`;
-
-export type Fila = Record<string, unknown>;
-
-/** Nivel 1: por tienda (2 primeros caracteres de la serie). Incluye la fila de totales. */
-export async function porTienda(bd: string, f: FiltrosVentas): Promise<{ filas: Fila[]; totales: Fila }> {
-  const { where, params } = filtrosLineas(f);
-  const sqlText = `${cteTickets(where)}
-SELECT G.*, LTRIM(RTRIM(ISNULL(S.DESCRIPCION, G.TIENDA))) AS DESCRIPCION
-FROM (
-  SELECT SUBSTRING(T.NUMSERIE, 1, 2) AS TIENDA, ${METRICAS}
-  FROM #TIC T GROUP BY SUBSTRING(T.NUMSERIE, 1, 2)
-) G
-LEFT JOIN SERIES S WITH (NOLOCK) ON S.SERIE = G.TIENDA
-ORDER BY DESCRIPCION;
-SELECT ${METRICAS} FROM #TIC T;
-DROP TABLE #TIC;
-DROP TABLE #COT;`;
-  return conTotales(bd, sqlText, params);
+/** Nivel 1: por tienda (2 primeros caracteres de la serie). */
+export function porTienda(bd: string, f: FiltrosVentas) {
+  return ejecutar(bd, 'TIENDAS', f);
 }
 
 /** Nivel 2: por día, de una tienda. */
-export async function porDia(bd: string, f: FiltrosVentas, tienda: string): Promise<{ filas: Fila[]; totales: Fila }> {
-  const { where, params } = filtrosLineas(f);
-  params.TIENDA = p(() => sql.NVarChar(2), tienda);
-  const extra = "AND C.NUMSERIE LIKE @TIENDA + '%'";
-  const sqlText = `${cteTickets(where, extra)}
-SELECT CONVERT(varchar(10), T.FECHA, 120) AS FECHA, ${METRICAS}
-FROM #TIC T GROUP BY T.FECHA ORDER BY T.FECHA;
-SELECT ${METRICAS} FROM #TIC T;
-DROP TABLE #TIC;
-DROP TABLE #COT;`;
-  return conTotales(bd, sqlText, params);
+export function porDia(bd: string, f: FiltrosVentas, tienda: string) {
+  return ejecutar(bd, 'DIAS', f, { TIENDA: p(() => sql.NVarChar(2), tienda) });
 }
 
-/** Nivel 3: tickets de una tienda en un día (con factura, N.º fiscal y Z si los tiene). */
-export async function porTicket(bd: string, f: FiltrosVentas, tienda: string, fecha: string): Promise<{ filas: Fila[]; totales: Fila }> {
-  const { where, params } = filtrosLineas({ ...f, desde: fecha, hasta: fecha });
-  params.TIENDA = p(() => sql.NVarChar(2), tienda);
-  const extra = "AND C.NUMSERIE LIKE @TIENDA + '%'";
-  const sqlText = `${cteTickets(where, extra)}
-SELECT T.NUMSERIE, T.NUMALBARAN, T.N,
-       C.CAJA,
-       CONVERT(varchar(5), C.HORA, 108) AS HORA,
-       CASE WHEN SUBSTRING(T.NUMSERIE, 4, 1) = 'N' OR T.MONTO < 0 THEN 'Nota de crédito' ELSE 'Factura' END AS TIPO,
-       CASE WHEN C.NUMFAC IS NULL OR C.NUMFAC = 0 THEN T.NUMSERIE + '-' + CAST(T.NUMALBARAN AS varchar(12))
-            ELSE ISNULL(C.NUMSERIEFAC, '') + '-' + CAST(C.NUMFAC AS varchar(12)) END AS DOCUMENTO,
-       ISNULL(CL.NFISCAL, '') AS NFISCAL,
-       CL.ZFISCAL,
-       -- ICG guarda '00000000000' cuando no afecta a ninguna factura.
-       CASE WHEN REPLACE(ISNULL(CL.FACAFECTA, ''), '0', '') = '' THEN '' ELSE CL.FACAFECTA END AS FACAFECTA,
-       ROUND(T.MONTO, 2) AS MONTO, ROUND(T.IVA, 2) AS IVA, ROUND(T.IGTF, 2) AS IGTF,
-       ROUND(T.MONTO + T.IVA + T.IGTF, 2) AS TOTAL, ROUND(T.COSTO, 2) AS COSTO,
-       ROUND(T.MONTO - T.COSTO, 2) AS BENEFICIO,
-       ROUND((T.MONTO - T.COSTO) * 100.0 / NULLIF(T.MONTO, 0), 2) AS MARGEN,
-       T.UNIDADES
-FROM #TIC T
-JOIN ALBVENTACAB C WITH (NOLOCK) ON C.NUMSERIE = T.NUMSERIE AND C.NUMALBARAN = T.NUMALBARAN AND C.N = T.N
-LEFT JOIN FACTURASVENTACAMPOSLIBRES CL WITH (NOLOCK)
-  ON CL.NUMSERIE = C.NUMSERIEFAC AND CL.NUMFACTURA = C.NUMFAC AND CL.N = C.NFAC
-ORDER BY C.HORA, T.NUMSERIE, T.NUMALBARAN;
-SELECT ${METRICAS} FROM #TIC T;
-DROP TABLE #TIC;
-DROP TABLE #COT;`;
-  return conTotales(bd, sqlText, params);
+/** Nivel 3: tickets de una tienda en un día. */
+export function porTicket(bd: string, f: FiltrosVentas, tienda: string, fecha: string) {
+  return ejecutar(bd, 'TICKETS', f, { TIENDA: p(() => sql.NVarChar(2), tienda), FECHA: p(() => sql.Date, aFecha(fecha)) });
 }
 
-/** Nivel 4: líneas de un ticket. Mismos filtros, para que sumen lo que se vio en el nivel 3. */
-export async function lineasTicket(
-  bd: string,
-  f: FiltrosVentas,
-  ticket: { numSerie: string; numAlbaran: number; n: string },
-): Promise<{ filas: Fila[]; totales: Fila }> {
-  const { where, params } = filtrosLineas(f);
-  params.NUMSERIE = p(() => sql.NVarChar(4), ticket.numSerie);
-  params.NUMALBARAN = p(() => sql.Int, ticket.numAlbaran);
-  params.NTICKET = p(() => sql.NChar(1), ticket.n);
-  const sqlText = `
-WITH X AS (
-  SELECT C.FECHA, dbo.F_GET_COTIZACION(C.FECHA, @MONEDA) AS COT,
-         CASE WHEN C.CODMONEDA = @MONEDA THEN 1.0 ELSE C.FACTORMONEDA * dbo.F_GET_COTIZACION(C.FECHA, @MONEDA) END AS FD
-  FROM ALBVENTACAB C WITH (NOLOCK)
-  WHERE C.NUMSERIE = @NUMSERIE AND C.NUMALBARAN = @NUMALBARAN AND C.N = @NTICKET
-),
-LIN AS (
-  SELECT L.NUMLIN,
-         ISNULL(VC.NOMVENDEDOR, '') AS CAJERO,
-         ISNULL(VL.NOMVENDEDOR, '') AS VENDEDOR,
-         ART.REFPROVEEDOR, ART.DESCRIPCION, L.TALLA, L.COLOR,
-         L.UNIDADESTOTAL AS UNIDADES,
-         ROUND(L.PRECIO * X.FD, 2) AS PRECIO,
-         ISNULL(L.DTO, 0) AS DTO_LINEA,
-         ISNULL(C.DTOCOMERCIAL, 0) AS DTO_FACTURA,
-         L.TOTAL * (1 - ISNULL(C.DTOCOMERCIAL, 0) / 100.0) * X.FD AS MONTO,
-         L.TOTAL * (1 - ISNULL(C.DTOCOMERCIAL, 0) / 100.0) * ISNULL(L.IVA, 0) / 100.0 * X.FD AS IVA,
-         ISNULL(L.COSTE, 0) * L.UNIDADESTOTAL * X.COT AS COSTO
-  FROM ALBVENTACAB C WITH (NOLOCK)
-  CROSS JOIN X
-  JOIN ALBVENTALIN L WITH (NOLOCK) ON L.NUMSERIE = C.NUMSERIE AND L.NUMALBARAN = C.NUMALBARAN AND L.N = C.N
-  JOIN ARTICULOS ART WITH (NOLOCK) ON ART.CODARTICULO = L.CODARTICULO
-  LEFT JOIN VENDEDORES VC WITH (NOLOCK) ON VC.CODVENDEDOR = C.CODVENDEDOR
-  LEFT JOIN VENDEDORES VL WITH (NOLOCK) ON VL.CODVENDEDOR = L.CODVENDEDOR
-  WHERE C.NUMSERIE = @NUMSERIE AND C.NUMALBARAN = @NUMALBARAN AND C.N = @NTICKET
-    AND C.FECHA BETWEEN @DESDE AND @HASTA
-    ${where}
-)
-SELECT NUMLIN, CAJERO, VENDEDOR, REFPROVEEDOR, DESCRIPCION, TALLA, COLOR, UNIDADES, PRECIO, DTO_LINEA, DTO_FACTURA,
-       ROUND(MONTO, 2) AS MONTO, ROUND(IVA, 2) AS IVA, ROUND(COSTO, 2) AS COSTO,
-       ROUND(MONTO - COSTO, 2) AS BENEFICIO, ROUND((MONTO - COSTO) * 100.0 / NULLIF(MONTO, 0), 2) AS MARGEN
-FROM LIN ORDER BY NUMLIN;`;
-  const filas = await queryTenantRaw<Fila>(bd, sqlText, params);
-  const suma = (k: string) => Math.round(filas.reduce((a, r) => a + Number(r[k] ?? 0), 0) * 100) / 100;
-  const monto = suma('MONTO');
-  const costo = suma('COSTO');
-  return {
-    filas,
-    totales: {
-      UNIDADES: suma('UNIDADES'),
-      MONTO: monto,
-      IVA: suma('IVA'),
-      COSTO: costo,
-      BENEFICIO: Math.round((monto - costo) * 100) / 100,
-      MARGEN: monto ? Math.round(((monto - costo) * 100) / monto * 100) / 100 : null,
-    },
-  };
-}
-
-/** Ejecuta dos SELECT (filas y totales) en una sola ida al servidor. */
-async function conTotales(bd: string, sqlText: string, params: Record<string, SpParam>): Promise<{ filas: Fila[]; totales: Fila }> {
-  const conjuntos = await queryTenantMulti<Fila>(bd, sqlText, params);
-  return { filas: conjuntos[0] ?? [], totales: conjuntos[1]?.[0] ?? {} };
+/** Nivel 4: líneas de un ticket (mismos filtros, para que sumen lo del nivel 3). */
+export function lineasTicket(bd: string, f: FiltrosVentas, ticket: { numSerie: string; numAlbaran: number; n: string }) {
+  return ejecutar(bd, 'LINEAS', f, {
+    NUMSERIE: p(() => sql.NVarChar(4), ticket.numSerie),
+    NUMALBARAN: p(() => sql.Int, ticket.numAlbaran),
+    N: p(() => sql.NChar(1), ticket.n),
+  });
 }
 
 // --- Catálogos de los filtros ---
 
+/**
+ * Moneda con que arrancan los Detalles de Ventas y Compras: el dólar (CODIGOISO = 'USD'),
+ * aunque la principal de la empresa sea el bolívar (p. ej. BIGBEN); si no hay, la principal.
+ */
+export async function monedaPorDefecto(bd: string): Promise<number | null> {
+  const r = await queryTenantRaw<{ M: number | null }>(
+    bd,
+    `DECLARE @M INT;
+     IF COL_LENGTH('dbo.MONEDAS', 'CODIGOISO') IS NOT NULL
+       EXEC sys.sp_executesql
+         N'SELECT TOP 1 @M = CODMONEDA FROM dbo.MONEDAS WHERE LTRIM(RTRIM(CODIGOISO)) = ''USD'' ORDER BY CASE WHEN PRINCIPAL = ''T'' THEN 0 ELSE 1 END, CODMONEDA',
+         N'@M INT OUTPUT', @M = @M OUTPUT;
+     SELECT ISNULL(@M, (SELECT TOP 1 CODMONEDA FROM dbo.MONEDAS WHERE PRINCIPAL = 'T')) AS M;`,
+  );
+  return r[0]?.M ?? null;
+}
+
 export async function catalogos(bd: string) {
-  const [grupos, promociones, departamentos, marcas] = await Promise.all([
+  const [grupos, promociones, departamentos, marcas, moneda] = await Promise.all([
     queryTenantRaw<Fila>(bd, "SELECT SERIE, LTRIM(RTRIM(DESCRIPCION)) AS DESCRIPCION FROM SERIES WITH (NOLOCK) WHERE SERIE LIKE '_' AND SERIE <> 'Z' ORDER BY SERIE"),
     queryTenantRaw<Fila>(bd, 'SELECT IDPROMOCION, LTRIM(RTRIM(DESCRIPCION)) AS DESCRIPCION FROM PROMOCIONES WITH (NOLOCK) ORDER BY DESCRIPCION'),
     queryTenantRaw<Fila>(bd, 'SELECT NUMDPTO AS ID, LTRIM(RTRIM(DESCRIPCION)) AS DESCRIPCION FROM DEPARTAMENTO WITH (NOLOCK) ORDER BY DESCRIPCION'),
     queryTenantRaw<Fila>(bd, 'SELECT CODMARCA AS ID, LTRIM(RTRIM(DESCRIPCION)) AS DESCRIPCION FROM MARCA WITH (NOLOCK) ORDER BY DESCRIPCION'),
+    monedaPorDefecto(bd),
   ]);
   return {
     grupos: grupos.map((g) => ({ serie: String(g.SERIE).trim(), descripcion: String(g.DESCRIPCION ?? '') })),
     promociones: promociones.map((x) => ({ id: Number(x.IDPROMOCION), descripcion: String(x.DESCRIPCION ?? '') })),
     departamentos: departamentos.map(opcion),
     marcas: marcas.map(opcion),
+    monedaDefecto: moneda,
   };
 }
 

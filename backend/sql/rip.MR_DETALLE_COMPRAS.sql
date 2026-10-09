@@ -1,0 +1,270 @@
+-- VERSION: 2
+/* =============================================================================
+   rip.MR_DETALLE_COMPRAS - Detalle de Compras (Aplicativo Web, modulo "detalle-compras")
+   -----------------------------------------------------------------------------
+   Compras por niveles. Un solo procedimiento para que el calculo sea el mismo en
+   todos (los totales de un nivel son la suma del siguiente):
+
+     @NIVEL = 'TIENDAS'      por tienda (2 primeros caracteres de la serie)
+              'PROVEEDORES'  por proveedor, de @TIENDA
+              'DOCUMENTOS'   documentos de @PROVEEDOR en @TIENDA
+              'LINEAS'       articulos de un documento (@NUMSERIE, @NUMFACTURA, @N)
+
+   Devuelve DOS conjuntos de resultados: las filas y una fila de totales.
+
+   MONTOS (fiscales, como rip.MR_LIBRO_COMPRA; de FACTURASCOMPRATOT):
+     EXENTO   = bases con IVA 0            (CODDTO = -1)
+     BASE     = bases gravadas             (CODDTO = -1, IVA <> 0)
+     IVA      = impuesto                   (CODDTO = -1)
+     TOTAL    = EXENTO + BASE + IVA
+     IGTF     = fila del cargo @CODIGTF
+     RETENIDO = IVA retenido: FACTURASCOMPRADTOS con @CODRETENCION (en positivo)
+   Moneda: todo en @MONEDA, con la cotizacion de la fecha de la factura del proveedor:
+   x 1 si el documento ya esta en esa moneda, si no x FACTORMONEDA x cotizacion.
+   Rango de fechas sobre FACTURASCOMPRA.FECHA (fecha de registro), como el Libro.
+
+   LINEAS: los articulos de los albaranes de la factura (ALBCOMPRALIN). Son
+   informativas: en gastos sin articulos, precios con IVA incluido o exentos, su suma
+   puede no coincidir con los montos fiscales del documento.
+
+   FILTROS (NULL = sin filtro)
+     @TIPOS       TIPODOC separados por coma (p. ej. '6,8,12,22')
+     @PROVEEDOR   CODPROVEEDOR
+     @REFS        referencias (REFPROVEEDOR) separadas por coma
+     @DPTO > @SECCION > @FAMILIA > @SUBFAMILIA   (cada uno solo con el anterior)
+     @MARCA > @LINEA
+   Los filtros por articulo eligen QUE documentos se muestran (los que traen al menos
+   una linea que cumple); cada documento cuenta completo.
+
+   INSTALACION
+     El Aplicativo Web lo crea solo en cada base la primera vez que se usa el
+     modulo. Cuando trae una version nueva (linea "-- VERSION" de arriba) lo
+     actualiza SOLO si nadie lo modifico desde que lo instalo; si se ajusto para un
+     cliente, el ajuste se respeta. Para reinstalar la version original, ejecutar este script completo.
+     Compatible con SQL Server 2012 o superior.
+   ============================================================================= */
+IF SCHEMA_ID('rip') IS NULL EXEC('CREATE SCHEMA rip');
+GO
+IF OBJECT_ID('rip.MR_DETALLE_COMPRAS', 'P') IS NULL
+  EXEC('CREATE PROCEDURE rip.MR_DETALLE_COMPRAS AS RETURN 0');
+GO
+ALTER PROCEDURE rip.MR_DETALLE_COMPRAS
+  @NIVEL        VARCHAR(12),
+  @DESDE        DATE,
+  @HASTA        DATE,
+  @MONEDA       INT,
+  @TIPOS        NVARCHAR(MAX) = NULL,
+  @REFS         NVARCHAR(MAX) = NULL,
+  @DPTO         INT           = NULL,
+  @SECCION      INT           = NULL,
+  @FAMILIA      INT           = NULL,
+  @SUBFAMILIA   INT           = NULL,
+  @MARCA        INT           = NULL,
+  @LINEA        INT           = NULL,
+  @TIENDA       NVARCHAR(2)   = NULL,
+  @PROVEEDOR    INT           = NULL,
+  @NUMSERIE     NVARCHAR(4)   = NULL,
+  @NUMFACTURA   INT           = NULL,
+  @N            NCHAR(1)      = NULL,
+  @CODRETENCION INT           = 3,
+  @CODIGTF      INT           = 4
+AS
+BEGIN
+  SET NOCOUNT ON;
+
+  -- Sentido de la cotizacion de @MONEDA (MONEDAS.NUMERADOR):
+  --   'F' (p. ej. Bs en una empresa con principal USD): COTIZACION = unidades de @MONEDA
+  --        por 1 de la principal  -> principal x COTIZACION.
+  --   'T' (p. ej. USD en una empresa con principal Bs): COTIZACION = unidades de la
+  --        principal por 1 de @MONEDA -> principal / COTIZACION.
+  -- Si @MONEDA es la principal, el factor es 1. (Comprobado con FACTORMONEDA de los
+  -- documentos: en 'F' es 1/COTIZACION y en 'T' es igual a COTIZACION.)
+  DECLARE @NUMERADOR NCHAR(1) = 'F', @ES_PRINCIPAL BIT = 0;
+  IF COL_LENGTH('dbo.MONEDAS', 'NUMERADOR') IS NOT NULL
+    EXEC sys.sp_executesql N'SELECT @N = NUMERADOR FROM dbo.MONEDAS WHERE CODMONEDA = @M',
+      N'@N NCHAR(1) OUTPUT, @M INT', @N = @NUMERADOR OUTPUT, @M = @MONEDA;
+  SELECT @ES_PRINCIPAL = CASE WHEN PRINCIPAL = 'T' THEN 1 ELSE 0 END FROM dbo.MONEDAS WHERE CODMONEDA = @MONEDA;
+
+  IF @NIVEL NOT IN ('TIENDAS', 'PROVEEDORES', 'DOCUMENTOS', 'LINEAS')
+  BEGIN RAISERROR('@NIVEL debe ser TIENDAS, PROVEEDORES, DOCUMENTOS o LINEAS.', 16, 1); RETURN; END
+  IF @NIVEL IN ('PROVEEDORES', 'DOCUMENTOS') AND @TIENDA IS NULL
+  BEGIN RAISERROR('Falta @TIENDA.', 16, 1); RETURN; END
+  IF @NIVEL = 'DOCUMENTOS' AND @PROVEEDOR IS NULL
+  BEGIN RAISERROR('Falta @PROVEEDOR.', 16, 1); RETURN; END
+  IF @NIVEL = 'LINEAS' AND (@NUMSERIE IS NULL OR @NUMFACTURA IS NULL OR @N IS NULL)
+  BEGIN RAISERROR('Faltan @NUMSERIE, @NUMFACTURA y @N.', 16, 1); RETURN; END
+
+  -- ---------------------------------------------------------------------------
+  -- LINEAS de un documento
+  -- ---------------------------------------------------------------------------
+  IF @NIVEL = 'LINEAS'
+  BEGIN
+    DECLARE @FD FLOAT;
+    SELECT @FD = CASE WHEN FC.CODMONEDA = @MONEDA THEN 1.0
+                      ELSE FC.FACTORMONEDA * CASE WHEN @ES_PRINCIPAL = 1 THEN 1.0 WHEN @NUMERADOR = 'T' THEN 1.0 / NULLIF(dbo.F_GET_COTIZACION(FC.FECHASUFACTURA, @MONEDA), 0) ELSE dbo.F_GET_COTIZACION(FC.FECHASUFACTURA, @MONEDA) END END
+    FROM FACTURASCOMPRA FC WITH (NOLOCK)
+    WHERE FC.NUMSERIE = @NUMSERIE AND FC.NUMFACTURA = @NUMFACTURA AND FC.N = @N;
+
+    SELECT L.NUMSERIE AS ALB_SERIE, L.NUMALBARAN, L.NUMLIN,
+           ART.REFPROVEEDOR, ART.DESCRIPCION, L.TALLA, L.COLOR, L.CODALMACEN AS ALMACEN,
+           L.UNIDADESTOTAL AS UNIDADES,
+           ROUND(L.PRECIO * @FD, 4) AS PRECIO,
+           ISNULL(L.DTO, 0) AS DTO_LINEA,
+           ISNULL(A.DTOCOMERCIAL, 0) AS DTO_DOCUMENTO,
+           L.TOTAL * (1 - ISNULL(A.DTOCOMERCIAL, 0) / 100.0) * @FD AS BASE,
+           ISNULL(L.IVA, 0) AS PORC_IVA,
+           L.TOTAL * (1 - ISNULL(A.DTOCOMERCIAL, 0) / 100.0) * ISNULL(L.IVA, 0) / 100.0 * @FD AS IVA
+    INTO #LIN
+    FROM ALBCOMPRACAB A WITH (NOLOCK)
+    JOIN ALBCOMPRALIN L WITH (NOLOCK) ON L.NUMSERIE = A.NUMSERIE AND L.NUMALBARAN = A.NUMALBARAN AND L.N = A.N
+    LEFT JOIN ARTICULOS ART WITH (NOLOCK) ON ART.CODARTICULO = L.CODARTICULO
+    WHERE A.NUMSERIEFAC = @NUMSERIE AND A.NUMFAC = @NUMFACTURA AND A.NFAC = @N;
+
+    SELECT ALB_SERIE, NUMALBARAN, NUMLIN, REFPROVEEDOR, DESCRIPCION, TALLA, COLOR, ALMACEN, UNIDADES, PRECIO,
+           DTO_LINEA, DTO_DOCUMENTO, ROUND(BASE, 2) AS BASE, PORC_IVA, ROUND(IVA, 2) AS IVA,
+           ROUND(BASE + IVA, 2) AS TOTAL,
+           ROUND(BASE / NULLIF(UNIDADES, 0), 4) AS COSTO_UNITARIO
+    FROM #LIN ORDER BY ALB_SERIE, NUMALBARAN, NUMLIN;
+
+    SELECT SUM(UNIDADES) AS UNIDADES, ROUND(SUM(BASE), 2) AS BASE, ROUND(SUM(IVA), 2) AS IVA,
+           ROUND(SUM(BASE + IVA), 2) AS TOTAL
+    FROM #LIN;
+    RETURN;
+  END
+
+  -- Jerarquia: cada nivel solo cuenta si viene el anterior.
+  IF @DPTO IS NULL SET @SECCION = NULL;
+  IF @SECCION IS NULL SET @FAMILIA = NULL;
+  IF @FAMILIA IS NULL SET @SUBFAMILIA = NULL;
+  IF @MARCA IS NULL SET @LINEA = NULL;
+
+  -- Listas separadas por coma (con XML: sirve en cualquier nivel de compatibilidad).
+  DECLARE @T TABLE (TIPODOC INT PRIMARY KEY);
+  IF NULLIF(LTRIM(RTRIM(@TIPOS)), '') IS NOT NULL
+    INSERT INTO @T (TIPODOC)
+    SELECT DISTINCT CAST(LTRIM(RTRIM(X.V.value('.', 'NVARCHAR(20)'))) AS INT)
+    FROM (SELECT CAST('<r>' + REPLACE((SELECT @TIPOS FOR XML PATH('')), ',', '</r><r>') + '</r>' AS XML) AS D) Q
+    CROSS APPLY Q.D.nodes('/r') X(V)
+    WHERE ISNUMERIC(LTRIM(RTRIM(X.V.value('.', 'NVARCHAR(20)')))) = 1;
+  DECLARE @HAY_TIPOS BIT = CASE WHEN EXISTS (SELECT 1 FROM @T) THEN 1 ELSE 0 END;
+
+  DECLARE @R TABLE (REF NVARCHAR(50) COLLATE DATABASE_DEFAULT PRIMARY KEY);
+  IF NULLIF(LTRIM(RTRIM(@REFS)), '') IS NOT NULL
+    INSERT INTO @R (REF)
+    SELECT DISTINCT LTRIM(RTRIM(X.V.value('.', 'NVARCHAR(50)')))
+    FROM (SELECT CAST('<r>' + REPLACE((SELECT @REFS FOR XML PATH('')), ',', '</r><r>') + '</r>' AS XML) AS D) Q
+    CROSS APPLY Q.D.nodes('/r') X(V)
+    WHERE LTRIM(RTRIM(X.V.value('.', 'NVARCHAR(50)'))) <> '';
+  DECLARE @HAY_REFS BIT = CASE WHEN EXISTS (SELECT 1 FROM @R) THEN 1 ELSE 0 END;
+  DECLARE @HAY_ART BIT = CASE WHEN @HAY_REFS = 1 OR @DPTO IS NOT NULL OR @MARCA IS NOT NULL THEN 1 ELSE 0 END;
+
+  -- Documentos del rango con sus montos fiscales convertidos (#DOC).
+  SELECT FC.NUMSERIE, FC.NUMFACTURA, FC.N, FC.FECHA, FC.FECHASUFACTURA, FC.TIPODOC, FC.CODPROVEEDOR,
+         CASE WHEN FC.CODMONEDA = @MONEDA THEN 1.0 ELSE FC.FACTORMONEDA END AS FACTOR,
+         CASE WHEN FC.CODMONEDA = @MONEDA THEN 0 ELSE 1 END AS CONVIERTE
+  INTO #BASE
+  FROM FACTURASCOMPRA FC WITH (NOLOCK)
+  WHERE FC.FECHA BETWEEN @DESDE AND @HASTA
+    AND (@TIENDA IS NULL OR FC.NUMSERIE LIKE @TIENDA + '%')
+    AND (@PROVEEDOR IS NULL OR FC.CODPROVEEDOR = @PROVEEDOR)
+    AND (@HAY_TIPOS = 0 OR FC.TIPODOC IN (SELECT TIPODOC FROM @T))
+    AND (@HAY_ART = 0 OR EXISTS (
+          SELECT 1
+          FROM ALBCOMPRACAB A WITH (NOLOCK)
+          JOIN ALBCOMPRALIN L WITH (NOLOCK) ON L.NUMSERIE = A.NUMSERIE AND L.NUMALBARAN = A.NUMALBARAN AND L.N = A.N
+          JOIN ARTICULOS ART WITH (NOLOCK) ON ART.CODARTICULO = L.CODARTICULO
+          WHERE A.NUMSERIEFAC = FC.NUMSERIE AND A.NUMFAC = FC.NUMFACTURA AND A.NFAC = FC.N
+            AND (@HAY_REFS = 0 OR ART.REFPROVEEDOR COLLATE DATABASE_DEFAULT IN (SELECT REF FROM @R))
+            AND (@DPTO IS NULL OR ART.DPTO = @DPTO)
+            AND (@SECCION IS NULL OR ART.SECCION = @SECCION)
+            AND (@FAMILIA IS NULL OR ART.FAMILIA = @FAMILIA)
+            AND (@SUBFAMILIA IS NULL OR ART.SUBFAMILIA = @SUBFAMILIA)
+            AND (@MARCA IS NULL OR ART.MARCA = @MARCA)
+            AND (@LINEA IS NULL OR ART.LINEA = @LINEA)))
+  OPTION (RECOMPILE);
+
+  -- Cotizacion una vez por fecha de factura (como funcion en linea se llamaria por fila).
+  SELECT F.FECHASUFACTURA, CASE WHEN @ES_PRINCIPAL = 1 THEN 1.0 WHEN @NUMERADOR = 'T' THEN 1.0 / NULLIF(dbo.F_GET_COTIZACION(F.FECHASUFACTURA, @MONEDA), 0) ELSE dbo.F_GET_COTIZACION(F.FECHASUFACTURA, @MONEDA) END AS COT
+  INTO #COT
+  FROM (SELECT DISTINCT FECHASUFACTURA FROM #BASE WHERE CONVIERTE = 1) F;
+
+  SELECT B.NUMSERIE, B.NUMFACTURA, B.N, B.FECHA, B.FECHASUFACTURA, B.TIPODOC, B.CODPROVEEDOR,
+         ISNULL(TT.EXENTO, 0) * FX.FD AS EXENTO,
+         ISNULL(TT.BASE, 0) * FX.FD AS BASE,
+         ISNULL(TT.IVA, 0) * FX.FD AS IVA,
+         ISNULL(TT.IGTF, 0) * FX.FD AS IGTF,
+         -ISNULL(RR.RET, 0) * FX.FD AS RETENIDO
+  INTO #DOC
+  FROM #BASE B
+  LEFT JOIN #COT C ON C.FECHASUFACTURA = B.FECHASUFACTURA
+  CROSS APPLY (SELECT CASE WHEN B.CONVIERTE = 0 THEN 1.0 ELSE B.FACTOR * C.COT END AS FD) FX
+  OUTER APPLY (
+    SELECT SUM(CASE WHEN ISNULL(T.CODDTO, -1) = -1 AND ISNULL(T.IVA, 0) = 0 THEN T.BASEIMPONIBLE END) AS EXENTO,
+           SUM(CASE WHEN ISNULL(T.CODDTO, -1) = -1 AND ISNULL(T.IVA, 0) <> 0 THEN T.BASEIMPONIBLE END) AS BASE,
+           SUM(CASE WHEN ISNULL(T.CODDTO, -1) = -1 THEN T.TOTIVA END) AS IVA,
+           SUM(CASE WHEN T.CODDTO = @CODIGTF THEN T.BASEIMPONIBLE END) AS IGTF
+    FROM FACTURASCOMPRATOT T WITH (NOLOCK)
+    WHERE T.SERIE = B.NUMSERIE AND T.NUMERO = B.NUMFACTURA AND T.N = B.N
+  ) TT
+  OUTER APPLY (
+    SELECT SUM(D.IMPORTE) AS RET
+    FROM FACTURASCOMPRADTOS D WITH (NOLOCK)
+    WHERE D.NUMSERIE = B.NUMSERIE AND D.NUMERO = B.NUMFACTURA AND D.N = B.N AND D.CODDTO = @CODRETENCION
+  ) RR;
+
+  IF @NIVEL = 'TIENDAS'
+    SELECT G.TIENDA, LTRIM(RTRIM(ISNULL(S.DESCRIPCION, G.TIENDA))) AS DESCRIPCION,
+           G.DOCUMENTOS, G.PROVEEDORES, G.EXENTO, G.BASE, G.IVA, G.TOTAL, G.IGTF, G.RETENIDO
+    FROM (
+      SELECT SUBSTRING(D.NUMSERIE, 1, 2) AS TIENDA,
+             COUNT(*) AS DOCUMENTOS, COUNT(DISTINCT D.CODPROVEEDOR) AS PROVEEDORES,
+             ROUND(SUM(D.EXENTO), 2) AS EXENTO, ROUND(SUM(D.BASE), 2) AS BASE, ROUND(SUM(D.IVA), 2) AS IVA,
+             ROUND(SUM(D.EXENTO + D.BASE + D.IVA), 2) AS TOTAL,
+             ROUND(SUM(D.IGTF), 2) AS IGTF, ROUND(SUM(D.RETENIDO), 2) AS RETENIDO
+      FROM #DOC D GROUP BY SUBSTRING(D.NUMSERIE, 1, 2)
+    ) G
+    LEFT JOIN SERIES S WITH (NOLOCK) ON S.SERIE = G.TIENDA
+    ORDER BY DESCRIPCION;
+
+  ELSE IF @NIVEL = 'PROVEEDORES'
+    SELECT D.CODPROVEEDOR,
+           LTRIM(RTRIM(ISNULL(P.NOMPROVEEDOR, CAST(D.CODPROVEEDOR AS VARCHAR(12))))) AS PROVEEDOR,
+           UPPER(LTRIM(RTRIM(REPLACE(ISNULL(P.NIF20, ''), '-', '')))) AS RIF,
+           COUNT(*) AS DOCUMENTOS,
+           ROUND(SUM(D.EXENTO), 2) AS EXENTO, ROUND(SUM(D.BASE), 2) AS BASE, ROUND(SUM(D.IVA), 2) AS IVA,
+           ROUND(SUM(D.EXENTO + D.BASE + D.IVA), 2) AS TOTAL,
+           ROUND(SUM(D.IGTF), 2) AS IGTF, ROUND(SUM(D.RETENIDO), 2) AS RETENIDO
+    FROM #DOC D
+    LEFT JOIN PROVEEDORES P WITH (NOLOCK) ON P.CODPROVEEDOR = D.CODPROVEEDOR
+    GROUP BY D.CODPROVEEDOR, P.NOMPROVEEDOR, P.NIF20
+    ORDER BY TOTAL DESC;
+
+  ELSE -- DOCUMENTOS
+    SELECT D.NUMSERIE, D.NUMFACTURA, D.N,
+           CONVERT(VARCHAR(10), D.FECHASUFACTURA, 120) AS FECHA,
+           CONVERT(VARCHAR(10), D.FECHA, 120) AS FECHA_REGISTRO,
+           LTRIM(RTRIM(ISNULL(TD.DESCRIPCION, CAST(D.TIPODOC AS VARCHAR(10))))) AS TIPO,
+           ISNULL(CL.NUMFAC, '') AS NUMFAC,
+           ISNULL(CL.NUMCONTROL, '') AS NUMCONTROL,
+           -- Numero de comprobante de retencion como en el Libro de Compra: AAAAMM + 8 digitos.
+           CASE WHEN ISNULL(CL.NUMRETENCIONIVA, '') NOT IN ('', '0')
+                THEN CAST(YEAR(D.FECHASUFACTURA) AS VARCHAR(4)) + RIGHT('0' + CAST(MONTH(D.FECHASUFACTURA) AS VARCHAR(2)), 2)
+                     + RIGHT('00000000' + LTRIM(RTRIM(CL.NUMRETENCIONIVA)), 8)
+                ELSE '' END AS COMPROBANTE,
+           ROUND(D.EXENTO, 2) AS EXENTO, ROUND(D.BASE, 2) AS BASE, ROUND(D.IVA, 2) AS IVA,
+           ROUND(D.EXENTO + D.BASE + D.IVA, 2) AS TOTAL,
+           ROUND(D.IGTF, 2) AS IGTF, ROUND(D.RETENIDO, 2) AS RETENIDO
+    FROM #DOC D
+    LEFT JOIN FACTURASCOMPRACAMPOSLIBRES CL WITH (NOLOCK)
+      ON CL.NUMSERIE = D.NUMSERIE AND CL.NUMFACTURA = D.NUMFACTURA AND CL.N = D.N
+    LEFT JOIN TIPOSDOC TD WITH (NOLOCK) ON TD.TIPODOC = D.TIPODOC
+    ORDER BY D.FECHASUFACTURA, D.NUMSERIE, D.NUMFACTURA;
+
+  -- Totales del nivel.
+  SELECT COUNT(*) AS DOCUMENTOS, COUNT(DISTINCT D.CODPROVEEDOR) AS PROVEEDORES,
+         ROUND(SUM(D.EXENTO), 2) AS EXENTO, ROUND(SUM(D.BASE), 2) AS BASE, ROUND(SUM(D.IVA), 2) AS IVA,
+         ROUND(SUM(D.EXENTO + D.BASE + D.IVA), 2) AS TOTAL,
+         ROUND(SUM(D.IGTF), 2) AS IGTF, ROUND(SUM(D.RETENIDO), 2) AS RETENIDO
+  FROM #DOC D;
+END
+GO

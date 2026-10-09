@@ -23,6 +23,7 @@ import auditoriaRoutes from './modules/auditoria/auditoria.routes.js';
 import formasPagoAsientoRoutes from './modules/formas-pago-asiento/formas-pago-asiento.routes.js';
 import actualizadorRoutes from './modules/actualizador/actualizador.routes.js';
 import detalleVentasRoutes from './modules/detalle-ventas/detalle-ventas.routes.js';
+import detalleComprasRoutes from './modules/detalle-compras/detalle-compras.routes.js';
 import frontendEstatico from './plugins/frontend-estatico.js';
 import { versionInstalada } from './shared/app-info.js';
 import { auditarResultadoActualizacion } from './modules/actualizador/actualizador.service.js';
@@ -59,6 +60,7 @@ export async function build() {
   await fastify.register(formasPagoAsientoRoutes);
   await fastify.register(actualizadorRoutes);
   await fastify.register(detalleVentasRoutes);
+  await fastify.register(detalleComprasRoutes);
   // Instalado como servicio sirve también el frontend compilado (un solo puerto).
   if (env.produccion) await fastify.register(frontendEstatico);
 

@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { api } from '../lib/api';
 import { useCatalogosStore } from '../stores/catalogos.store';
+import { useAuthStore } from '../stores/auth.store';
+import { monedaInicial, recordarMoneda } from '../lib/monedaReporte';
 import ReportTable from '../components/ReportTable.vue';
 import GraficaBarras from '../components/GraficaBarras.vue';
 import BaseModal from '../components/BaseModal.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
+import FiltrosArticulo from '../components/filtros/FiltrosArticulo.vue';
+import { filtrosArticuloVacios, parametrosArticulo, type Opcion } from '../lib/filtrosArticulo';
 
 /**
  * Detalle de Ventas (venía del PHP reportesicg): ventas por tienda → por día → tickets
@@ -13,16 +17,13 @@ import AppIcon from '../components/icons/AppIcon.vue';
  * que los totales de un nivel son la suma del siguiente.
  */
 type Fila = Record<string, unknown>;
-interface Opcion {
-  id: number;
-  descripcion: string;
-}
 interface Resultado {
   filas: Fila[];
   totales: Fila;
 }
 
 const catalogosBase = useCatalogosStore();
+const auth = useAuthStore();
 
 // --- Filtros ---
 function iso(d: Date) {
@@ -36,26 +37,15 @@ const filtros = reactive({
   moneda: '' as number | '',
   grupo: '',
   promocion: '' as number | '',
-  dpto: '' as number | '',
-  seccion: '' as number | '',
-  familia: '' as number | '',
-  subfamilia: '' as number | '',
-  marca: '' as number | '',
-  linea: '' as number | '',
 });
-const referencias = ref<{ referencia: string; descripcion: string }[]>([]);
+const articulo = ref(filtrosArticuloVacios());
 
 const catalogo = reactive({
   grupos: [] as { serie: string; descripcion: string }[],
   promociones: [] as Opcion[],
   departamentos: [] as Opcion[],
   marcas: [] as Opcion[],
-  secciones: [] as Opcion[],
-  familias: [] as Opcion[],
-  subfamilias: [] as Opcion[],
-  lineas: [] as Opcion[],
 });
-const filtrosArticuloAbiertos = ref(false);
 const errorCatalogos = ref('');
 
 const BASE = '/api/reportes/detalle-ventas';
@@ -63,9 +53,8 @@ const BASE = '/api/reportes/detalle-ventas';
 onMounted(async () => {
   try {
     await catalogosBase.loadBase();
-    const principal = catalogosBase.monedas.find((m) => m.principal) ?? catalogosBase.monedas[0];
-    if (principal && filtros.moneda === '') filtros.moneda = principal.codMoneda;
-    const c = await api.get<typeof catalogo>(`${BASE}/catalogos`);
+    const c = await api.get<typeof catalogo & { monedaDefecto: number | null }>(`${BASE}/catalogos`);
+    filtros.moneda = monedaInicial(auth.empresa?.codEmpresa, catalogosBase.monedas, c.monedaDefecto);
     catalogo.grupos = c.grupos;
     catalogo.promociones = c.promociones;
     catalogo.departamentos = c.departamentos;
@@ -74,78 +63,6 @@ onMounted(async () => {
     errorCatalogos.value = e instanceof Error ? e.message : 'No se pudieron cargar los filtros.';
   }
 });
-
-async function cargarNivel(nivel: 'seccion' | 'familia' | 'subfamilia' | 'linea') {
-  return api.get<Opcion[]>(`${BASE}/clasificacion`, {
-    nivel,
-    dpto: filtros.dpto === '' ? undefined : filtros.dpto,
-    seccion: filtros.seccion === '' ? undefined : filtros.seccion,
-    familia: filtros.familia === '' ? undefined : filtros.familia,
-    marca: filtros.marca === '' ? undefined : filtros.marca,
-  });
-}
-// Cada nivel de la clasificación depende del anterior: al cambiar uno se limpian los de abajo.
-watch(
-  () => filtros.dpto,
-  async () => {
-    filtros.seccion = '';
-    catalogo.secciones = filtros.dpto === '' ? [] : await cargarNivel('seccion');
-  },
-);
-watch(
-  () => filtros.seccion,
-  async () => {
-    filtros.familia = '';
-    catalogo.familias = filtros.seccion === '' ? [] : await cargarNivel('familia');
-  },
-);
-watch(
-  () => filtros.familia,
-  async () => {
-    filtros.subfamilia = '';
-    catalogo.subfamilias = filtros.familia === '' ? [] : await cargarNivel('subfamilia');
-  },
-);
-watch(
-  () => filtros.marca,
-  async () => {
-    filtros.linea = '';
-    catalogo.lineas = filtros.marca === '' ? [] : await cargarNivel('linea');
-  },
-);
-
-// Buscador de artículos (por referencia o descripción).
-const busqueda = ref('');
-const sugerencias = ref<{ referencia: string; descripcion: string }[]>([]);
-let temporizador: ReturnType<typeof setTimeout> | null = null;
-watch(busqueda, (texto) => {
-  if (temporizador) clearTimeout(temporizador);
-  if (texto.trim().length < 2) {
-    sugerencias.value = [];
-    return;
-  }
-  temporizador = setTimeout(async () => {
-    try {
-      sugerencias.value = await api.get(`${BASE}/articulos`, { q: texto.trim() });
-    } catch {
-      sugerencias.value = [];
-    }
-  }, 300);
-});
-function agregarReferencia(a: { referencia: string; descripcion: string }) {
-  if (!referencias.value.some((r) => r.referencia === a.referencia)) referencias.value.push(a);
-  busqueda.value = '';
-  sugerencias.value = [];
-}
-function quitarReferencia(ref: string) {
-  referencias.value = referencias.value.filter((r) => r.referencia !== ref);
-}
-
-const filtrosArticuloActivos = computed(
-  () =>
-    referencias.value.length +
-    [filtros.dpto, filtros.marca].filter((v) => v !== '').length,
-);
 
 const yyyyMMdd = (isoFecha: string) => isoFecha.replace(/-/g, '');
 const ddmmyyyy = (isoFecha: string) => isoFecha.split('-').reverse().join('/');
@@ -158,13 +75,7 @@ function parametros(): Record<string, string | number | undefined> {
     moneda: v(filtros.moneda),
     grupo: filtros.grupo || undefined,
     promocion: v(filtros.promocion),
-    refs: referencias.value.length ? referencias.value.map((r) => r.referencia).join(',') : undefined,
-    dpto: v(filtros.dpto),
-    seccion: v(filtros.seccion),
-    familia: v(filtros.familia),
-    subfamilia: v(filtros.subfamilia),
-    marca: v(filtros.marca),
-    linea: v(filtros.linea),
+    ...parametrosArticulo(articulo.value),
   };
 }
 
@@ -184,6 +95,7 @@ const monedaActual = computed(() => catalogosBase.monedas.find((m) => m.codMoned
 async function consultar() {
   if (!formularioValido.value) return;
   ultimos = parametros();
+  recordarMoneda(auth.empresa?.codEmpresa, filtros.moneda);
   nivel.value = { tipo: 'tiendas' };
   await cargar();
 }
@@ -346,75 +258,7 @@ async function abrirTicket(fila: Fila) {
         </button>
       </div>
 
-      <button type="button" class="enlace-filtros" :aria-expanded="filtrosArticuloAbiertos" @click="filtrosArticuloAbiertos = !filtrosArticuloAbiertos">
-        {{ filtrosArticuloAbiertos ? '▾' : '▸' }} Filtros por artículo
-        <span v-if="filtrosArticuloActivos" class="badge">{{ filtrosArticuloActivos }}</span>
-      </button>
-      <div v-if="filtrosArticuloAbiertos" class="filtros-articulo">
-        <div class="campo referencias">
-          Artículos (referencia o descripción)
-          <div class="buscador">
-            <input v-model="busqueda" type="text" placeholder="Escriba al menos 2 letras…" autocomplete="off" />
-            <ul v-if="sugerencias.length" class="sugerencias">
-              <li v-for="s in sugerencias" :key="s.referencia">
-                <button type="button" @click="agregarReferencia(s)">
-                  <strong>{{ s.referencia }}</strong> {{ s.descripcion }}
-                </button>
-              </li>
-            </ul>
-          </div>
-          <div v-if="referencias.length" class="chips">
-            <span v-for="r in referencias" :key="r.referencia" class="chip" :title="r.descripcion">
-              {{ r.referencia }}
-              <button type="button" :aria-label="`Quitar ${r.referencia}`" @click="quitarReferencia(r.referencia)">×</button>
-            </span>
-          </div>
-        </div>
-        <div class="fila-filtros">
-          <label class="campo">
-            Departamento
-            <select v-model="filtros.dpto">
-              <option value="">Todos</option>
-              <option v-for="o in catalogo.departamentos" :key="o.id" :value="o.id">{{ o.descripcion }}</option>
-            </select>
-          </label>
-          <label class="campo">
-            Sección
-            <select v-model="filtros.seccion" :disabled="filtros.dpto === ''">
-              <option value="">Todas</option>
-              <option v-for="o in catalogo.secciones" :key="o.id" :value="o.id">{{ o.descripcion }}</option>
-            </select>
-          </label>
-          <label class="campo">
-            Familia
-            <select v-model="filtros.familia" :disabled="filtros.seccion === ''">
-              <option value="">Todas</option>
-              <option v-for="o in catalogo.familias" :key="o.id" :value="o.id">{{ o.descripcion }}</option>
-            </select>
-          </label>
-          <label class="campo">
-            Subfamilia
-            <select v-model="filtros.subfamilia" :disabled="filtros.familia === ''">
-              <option value="">Todas</option>
-              <option v-for="o in catalogo.subfamilias" :key="o.id" :value="o.id">{{ o.descripcion }}</option>
-            </select>
-          </label>
-          <label class="campo">
-            Marca
-            <select v-model="filtros.marca" :disabled="!catalogo.marcas.length">
-              <option value="">{{ catalogo.marcas.length ? 'Todas' : 'Sin marcas' }}</option>
-              <option v-for="o in catalogo.marcas" :key="o.id" :value="o.id">{{ o.descripcion }}</option>
-            </select>
-          </label>
-          <label class="campo">
-            Línea
-            <select v-model="filtros.linea" :disabled="filtros.marca === ''">
-              <option value="">Todas</option>
-              <option v-for="o in catalogo.lineas" :key="o.id" :value="o.id">{{ o.descripcion }}</option>
-            </select>
-          </label>
-        </div>
-      </div>
+      <FiltrosArticulo v-model="articulo" :base="BASE" :departamentos="catalogo.departamentos" :marcas="catalogo.marcas" />
       <p v-if="errorCatalogos" class="error">{{ errorCatalogos }}</p>
       <p v-if="filtros.desde > filtros.hasta" class="error">La fecha "desde" es posterior a "hasta".</p>
     </form>
@@ -526,102 +370,6 @@ async function abrirTicket(fila: Fila) {
 .fila-filtros > button {
   height: 2.35rem;
   padding: 0 1rem;
-}
-.enlace-filtros {
-  margin-top: var(--space-3);
-  background: none;
-  color: var(--color-brand-darker);
-  padding: 0;
-  height: auto;
-  font-size: 0.85rem;
-}
-.enlace-filtros:hover:not(:disabled) {
-  background: none;
-  text-decoration: underline;
-}
-.badge {
-  font-size: 0.7rem;
-  background: var(--color-brand-bg-strong);
-  color: var(--color-brand-darker);
-  border-radius: 999px;
-  padding: 0 0.45rem;
-}
-.filtros-articulo {
-  margin-top: var(--space-3);
-  padding-top: var(--space-3);
-  border-top: 1px dashed var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-.buscador {
-  position: relative;
-  max-width: 28rem;
-}
-.buscador input {
-  width: 100%;
-}
-.sugerencias {
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + 2px);
-  left: 0;
-  right: 0;
-  margin: 0;
-  padding: var(--space-1);
-  list-style: none;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-lg);
-  max-height: 16rem;
-  overflow-y: auto;
-}
-.sugerencias button {
-  width: 100%;
-  justify-content: flex-start;
-  text-align: left;
-  background: transparent;
-  color: var(--text);
-  font-weight: 400;
-  font-size: 0.82rem;
-  padding: 0.35rem 0.5rem;
-  height: auto;
-  text-transform: none;
-  letter-spacing: 0;
-}
-.sugerencias button:hover {
-  background: var(--bg-subtle);
-}
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  font-size: 0.8rem;
-  font-weight: 600;
-  text-transform: none;
-  letter-spacing: 0;
-  color: var(--color-brand-darker);
-  background: var(--color-brand-bg-strong);
-  border-radius: 999px;
-  padding: 0.15rem 0.3rem 0.15rem 0.6rem;
-}
-.chip button {
-  width: 1.2rem;
-  height: 1.2rem;
-  padding: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: inherit;
-  font-size: 0.9rem;
-}
-.chip button:hover:not(:disabled) {
-  background: var(--color-brand-bg);
 }
 .barra-nivel {
   display: flex;
