@@ -426,7 +426,7 @@ watch(empresaModulos, () => {
       </p>
       <p v-if="modulosCargando" class="estado">Cargando...</p>
       <template v-else>
-        <div class="modulos-instalacion">
+        <div class="modulos-instalacion" :class="{ 'por-empresa': empresaModulos !== '' }">
           <div v-for="g in modulosInstalacionPorGrupo" :key="g.grupo" class="bloque">
             <div class="bloque-titulo">{{ g.grupo }}</div>
             <template v-if="empresaModulos === ''">
@@ -716,9 +716,17 @@ watch(empresaModulos, () => {
   font-weight: 400;
   color: var(--text);
 }
+/* Por empresa cada fila lleva nombre, lista y estado: una sola columna para que quepan. */
+.modulos-instalacion.por-empresa {
+  grid-template-columns: minmax(0, 1fr);
+}
+.nombre-modulo {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .fila-excepcion {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 5.5rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 15rem) 5.5rem;
   align-items: center;
   gap: var(--space-2);
   padding: 0.2rem 0.3rem;
@@ -729,6 +737,7 @@ watch(empresaModulos, () => {
   background: var(--color-brand-bg);
 }
 .fila-excepcion select {
+  width: 100%;
   font-size: 0.82rem;
   height: 1.9rem;
   padding: 0 0.4rem;

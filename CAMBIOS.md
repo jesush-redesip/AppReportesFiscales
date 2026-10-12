@@ -3,6 +3,9 @@
 Cada versión publicada con `scripts/publicar.ps1` agrega aquí su sección. Lo que esté
 entre la versión instalada y la nueva se muestra en la pantalla Actualizaciones.
 
+## 1.1.2 - 2026-10-12
+- Modulos de la instalacion: en la vista por empresa los nombres de los modulos ya no se ven solapados
+
 ## 1.1.1 - 2026-10-12
 - Pagares: asientos contables desde el Aplicativo (desembolso, pagos con capital, intereses, IGTF y otros cargos, reversos) en la contabilidad del ano de la fecha contable
 - Pagares: moneda por pagare (USD indexado o Bs) y montos exactos en Bs del estado de cuenta del banco
