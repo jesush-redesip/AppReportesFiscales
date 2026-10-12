@@ -6,7 +6,7 @@ import AppIcon from '../icons/AppIcon.vue';
 
 const route = useRoute();
 
-const PANTALLAS_SIN_MENU: Record<string, string> = { '/auditoria': 'Auditoría', '/actualizaciones': 'Actualizaciones' };
+const PANTALLAS_SIN_MENU: Record<string, string> = { '/auditoria': 'Auditoría', '/actualizaciones': 'Actualizaciones', '/scripts-sql': 'Scripts SQL' };
 
 const trail = computed(() => {
   if (route.path === '/') return [{ label: 'Inicio' }];

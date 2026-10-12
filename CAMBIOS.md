@@ -3,6 +3,10 @@
 Cada versión publicada con `scripts/publicar.ps1` agrega aquí su sección. Lo que esté
 entre la versión instalada y la nueva se muestra en la pantalla Actualizaciones.
 
+## 1.1.3 - 2026-10-12
+- Nuevo modulo Scripts SQL (solo SUPERVISOR): catalogo de procedimientos y funciones por empresa, instalacion de scripts oficiales y scripts propios (crear o modificar procedimientos, funciones y vistas) con prueba previa, respaldo, historial, restauracion y descarga .sql
+- Pagares: las operaciones (registrar, pagar, editar, tasa, moneda, reversar, anular, configuracion) quedan en la auditoria
+
 ## 1.1.2 - 2026-10-12
 - Modulos de la instalacion: en la vista por empresa los nombres de los modulos ya no se ven solapados
 

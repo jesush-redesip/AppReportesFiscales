@@ -124,6 +124,10 @@ function onLogout() {
               <AppIcon name="lock" :size="15" />
               Auditoría
             </RouterLink>
+            <RouterLink to="/scripts-sql" class="boton-enlace" title="Procedimientos y scripts SQL de las empresas">
+              <AppIcon name="table" :size="15" />
+              Scripts SQL
+            </RouterLink>
             <RouterLink
               to="/actualizaciones"
               class="boton-enlace"

@@ -22,11 +22,11 @@ export class ProcedimientoError extends Error {
         this.name = 'ProcedimientoError';
     }
 }
-const PROPIEDAD = 'AplicativoWeb';
+export const PROPIEDAD = 'AplicativoWeb';
 /** bd|procedimiento ya comprobados en esta ejecución del servicio. */
 const comprobados = new Set();
-const huella = (texto) => createHash('sha256').update(texto).digest('hex');
-function leerScript(nombre) {
+export const huella = (texto) => createHash('sha256').update(texto).digest('hex');
+export function leerScript(nombre) {
     const archivo = path.join(RAIZ_APP, 'backend', 'sql', `${nombre}.sql`);
     let texto;
     try {
@@ -82,6 +82,25 @@ async function instalar(bd, nombre, texto, version) {
        EXEC sys.sp_updateextendedproperty @name = @PROP, @value = @VALOR, @level0type = 'SCHEMA', @level0name = @ESQ, @level1type = 'PROCEDURE', @level1name = @OBJ;
      ELSE
        EXEC sys.sp_addextendedproperty @name = @PROP, @value = @VALOR, @level0type = 'SCHEMA', @level0name = @ESQ, @level1type = 'PROCEDURE', @level1name = @OBJ;`, params);
+}
+/** Scripts oficiales que trae el aplicativo (backend/sql/<esquema.nombre>.sql). */
+export function scriptsOficiales() {
+    const dir = path.join(RAIZ_APP, 'backend', 'sql');
+    let archivos = [];
+    try {
+        archivos = fs.readdirSync(dir).filter((a) => /^[A-Za-z0-9_]+.[A-Za-z0-9_]+.sql$/i.test(a));
+    }
+    catch {
+        return [];
+    }
+    return archivos.map((a) => {
+        const nombre = a.replace(/.sql$/i, '');
+        return { nombre, version: leerScript(nombre).version };
+    });
+}
+/** Olvida que ya se comprobó (después de instalar o restaurar a mano desde Scripts SQL). */
+export function olvidarComprobado(bd, nombre) {
+    comprobados.delete(`${bd}|${nombre}`);
 }
 export async function asegurarProcedimiento(bd, nombre) {
     const clave = `${bd}|${nombre}`;

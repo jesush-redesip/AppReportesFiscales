@@ -15,6 +15,7 @@ import DetalleVentasView from '../views/DetalleVentasView.vue';
 import DetalleComprasView from '../views/DetalleComprasView.vue';
 import PagaresView from '../views/PagaresView.vue';
 import ActualizacionesView from '../views/ActualizacionesView.vue';
+import ScriptsSqlView from '../views/ScriptsSqlView.vue';
 import LoginView from '../views/LoginView.vue';
 import { useAuthStore } from '../stores/auth.store';
 import { PERMISO_CONFIG_CAJAS, moduloDeRuta } from '../lib/reportes';
@@ -39,6 +40,7 @@ export const router = createRouter({
     { path: '/detalle-compras', component: DetalleComprasView },
     { path: '/pagares', component: PagaresView },
     { path: '/actualizaciones', component: ActualizacionesView },
+    { path: '/scripts-sql', component: ScriptsSqlView },
   ],
 });
 
@@ -55,7 +57,7 @@ router.beforeEach((to) => {
   }
 
   // Auditoría: solo SUPERVISOR (el backend también rechaza /api/auditoria a los demás).
-  if (to.path === '/auditoria' || to.path === '/actualizaciones') return auth.esSupervisor ? true : { path: '/' };
+  if (to.path === '/auditoria' || to.path === '/actualizaciones' || to.path === '/scripts-sql') return auth.esSupervisor ? true : { path: '/' };
 
   // Configuración del cierre: quien tenga el permiso "Configuración" del Cierre de Caja
   // además del acceso al cierre (el backend valida lo mismo). El SUPERVISOR incluido.

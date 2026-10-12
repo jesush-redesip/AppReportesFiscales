@@ -44,6 +44,25 @@ const REGLAS = {
     'POST /api/debug/estado': { accion: (b) => (b?.activo ? 'Modo debug activado' : 'Modo debug desactivado') },
     // El resultado final (tras reiniciar el servicio) lo registra el actualizador al arrancar.
     'POST /api/actualizador/actualizar': { accion: () => 'Actualización del aplicativo (iniciada)', detalle: () => null },
+    // Scripts SQL: el texto completo queda en la tabla RIP_SCRIPTSAPLICADOS de cada empresa.
+    'POST /api/scripts/aplicar': {
+        accion: () => 'Script SQL aplicado',
+        detalle: (b) => ({ archivo: b?.nombre ?? null, empresas: b?.codEmpresas }),
+    },
+    'POST /api/scripts/instalar-oficial': { accion: () => 'Script SQL oficial instalado', detalle: (b) => ({ objeto: b?.nombre, empresas: b?.codEmpresas }) },
+    'POST /api/scripts/restaurar': { accion: () => 'Objeto SQL restaurado', detalle: (b) => ({ codEmpresa: b?.codEmpresa, respaldo: b?.idRespaldo }) },
+    // Pagarés: operaciones que modifican datos (y, si corresponde, generan asientos).
+    'POST /api/reportes/pagares/registro': {
+        accion: () => 'Pagaré registrado',
+        detalle: (b) => ({ pagare: b?.pagare, serie: b?.serie, monto: b?.monto, moneda: b?.moneda ?? 'USD' }),
+    },
+    'POST /api/reportes/pagares/cuotas/pagar': { accion: () => 'Pago de cuota de pagaré' },
+    'POST /api/reportes/pagares/cuotas/editar': { accion: () => 'Cuota de pagaré editada' },
+    'POST /api/reportes/pagares/recalcular': { accion: () => 'Tasa de pagaré cambiada' },
+    'POST /api/reportes/pagares/moneda': { accion: () => 'Moneda de pagaré cambiada' },
+    'POST /api/reportes/pagares/reversar': { accion: () => 'Asiento de pagaré reversado' },
+    'POST /api/reportes/pagares/anular': { accion: () => 'Pagaré anulado' },
+    'PUT /api/reportes/pagares/config': { accion: () => 'Configuración contable de pagarés' },
 };
 /** Descargas de Excel: GET /api/reportes/<modulo> (la vista previa es /preview y no se audita). */
 const RUTA_EXCEL = /^\/api\/reportes\/([a-z0-9-]+)$/;
