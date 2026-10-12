@@ -47,8 +47,9 @@ async function modulosPlugin(fastify: FastifyInstance) {
     }
 
     // Módulo que este grupo económico no tiene (o que el SUPERVISOR desactivó).
-    if (!(await estaActivo(modulo))) {
-      return reply.status(403).send({ error: 'Forbidden', message: 'Este módulo no está activo en esta instalación.' });
+    // Activo para la empresa de la sesión (lo general más sus excepciones).
+    if (!(await estaActivo(modulo, request.user?.codEmpresa))) {
+      return reply.status(403).send({ error: 'Forbidden', message: 'Este módulo no está activo para esta empresa.' });
     }
 
     const modulos = await getModulosUsuario(codUsuario);

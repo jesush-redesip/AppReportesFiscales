@@ -1,18 +1,18 @@
 import sql from 'mssql';
 import { assertSafeDatabaseIdentifier, queryTenantRaw, withTenantTransaction } from '../../shared/db/tenant-pool.js';
-import { PagaresError, olvidarEsquema } from './pagares.repository.js';
+import { MONEDAS, PagaresError, olvidarEsquema } from './pagares.repository.js';
 import { generarCuotas, validar } from './pagares.calculo.js';
+import { bdContableDelEjercicio, leerConfig } from './pagares.contabilidad.js';
+import { apuntesDe, asegurarTabla, cotizacionUsd, postearAsiento, registrarAsiento, tablaAsientos, } from './pagares.asientos.js';
 /**
- * Pagarés › gestión (Fase 2): registrar, pagar cuotas, editarlas, recalcular intereses y
- * anular. SIN asientos contables: convive con el PHP reportesicg, que sigue
- * contabilizando. Por eso lo que se escribe es lo mismo que escribe el PHP:
+ * Pagarés › gestión: registrar, pagar cuotas, editarlas, recalcular intereses, reversar
+ * y anular. Reemplaza al PHP reportesicg (que ya no se usa) sobre sus mismas tablas:
  *  - RIP_PAGARESCAB / RIP_PAGARESLIN con los mismos campos (CUENTABANCO, CUENTAPAGARE,
- *    DBCONTABLE…), para que el PHP pueda contabilizar los pagos.
- *  - La cuenta del pagaré (210104xxx, "PAGARÉ <banco> #<n>") en la base contable, como
- *    hace el PHP al registrar. Si la base contable no está en este servidor no se crea y
- *    se avisa.
- * Lo que NO hace (queda para la Fase 3 o para el PHP): asientos de desembolso, comisión,
- * intereses, IGTF y pago de capital.
+ *    DBCONTABLE…), así los pagarés que registró el PHP se siguen pagando aquí.
+ *  - La cuenta del pagaré (210104xxx, "PAGARÉ <banco> #<n>") en la base contable. Si la
+ *    base contable no está en este servidor no se crea y se avisa.
+ *  - Los asientos (desembolso, pagos, reversos) si la configuración contable lo indica
+ *    (RIP_PAGARESCONFIG.CONTABILIZAR, encendido por defecto): ver pagares.asientos.ts.
  */
 const p = (type, value) => ({ type, value });
 const RAIZ_CUENTA_PAGARE = '210104';
@@ -75,10 +75,82 @@ export async function bancos(bd, serie) {
     usados.forEach((f) => !lista.has(f.CUENTA) && lista.set(f.CUENTA, f.TITULO));
     return [...lista.entries()].map(([cuenta, titulo]) => ({ cuenta, titulo })).sort((a, b) => a.titulo.localeCompare(b.titulo));
 }
+/** Un monto en Bs indicado por el usuario (o undefined para calcularlo). */
+function bsIndicado(v, nombre) {
+    if (v === undefined || v === null)
+        return undefined;
+    if (!(v >= 0))
+        throw new PagaresError(`El monto en Bs de ${nombre} no es válido.`);
+    return r2c(v);
+}
+// --- Moneda del pagaré (tabla propia: el PHP no la guardaba) ---
+const TABLA_MONEDA = 'RIP_PAGARESMONEDA';
+async function guardarMoneda(req, cod, moneda) {
+    await req().query(`IF OBJECT_ID('${TABLA_MONEDA}', 'U') IS NULL
+       CREATE TABLE ${TABLA_MONEDA} (CODPAGARES INT NOT NULL PRIMARY KEY, MONEDA NVARCHAR(3) NOT NULL)`);
+    await req()
+        .input('COD', sql.Int, cod)
+        .input('MONEDA', sql.NVarChar(3), moneda)
+        .query(`UPDATE ${TABLA_MONEDA} SET MONEDA = @MONEDA WHERE CODPAGARES = @COD
+       IF @@ROWCOUNT = 0 INSERT INTO ${TABLA_MONEDA} (CODPAGARES, MONEDA) VALUES (@COD, @MONEDA)`);
+}
+/** Moneda del pagaré: la guardada o USD (los registrados en el PHP eran en USD). */
+async function monedaDe(req, cod) {
+    const r = await req()
+        .input('COD', sql.Int, cod)
+        .query(`IF OBJECT_ID('${TABLA_MONEDA}', 'U') IS NOT NULL EXEC sp_executesql N'SELECT MONEDA FROM ${TABLA_MONEDA} WHERE CODPAGARES = @C', N'@C INT', @C = @COD`);
+    const m = r.recordset?.[0]?.MONEDA;
+    return m === 'VES' ? 'VES' : 'USD';
+}
+/** Cambia la moneda de un pagaré (afecta a los asientos que se generen desde ahora). */
+export async function cambiarMoneda(bd, cod, moneda) {
+    if (!MONEDAS.includes(moneda))
+        throw new PagaresError('Moneda no válida.');
+    await withTenantTransaction(bd, async (req) => {
+        await verificarVigente(req, cod);
+        await guardarMoneda(req, cod, moneda);
+    });
+    olvidarEsquema(bd);
+}
+const r2c = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+function validarCargos(cargos = []) {
+    return cargos.map((c) => {
+        if (!c.descripcion?.trim())
+            throw new PagaresError('Cada cargo debe tener una descripción.');
+        if (!(c.monto > 0))
+            throw new PagaresError('Los cargos deben ser mayores que cero.');
+        return { descripcion: c.descripcion.trim().slice(0, 80), monto: r2c(c.monto) };
+    });
+}
+/** Tasa a usar: la indicada o la cotización USD de la fecha. */
+async function tasaDe(bd, fechaIso, tasa) {
+    if (tasa !== undefined && tasa !== null) {
+        if (!(tasa > 0))
+            throw new PagaresError('La tasa de cambio debe ser mayor que cero.');
+        return tasa;
+    }
+    const c = await cotizacionUsd(bd, fechaIso);
+    if (!c)
+        throw new PagaresError('No hay cotización del dólar para esa fecha: indique la tasa.');
+    return c.tasa;
+}
+async function bdContableObligatoria(bd, serie, fechaIso) {
+    const bdC = await bdContableDelEjercicio(bd, serie, fechaIso);
+    if (!bdC) {
+        throw new PagaresError(`No hay contabilidad del ejercicio ${fechaIso.slice(0, 4)} para la empresa ${serie} en este servidor (GENERAL..EMPRESASCONTABLES). No se puede contabilizar.`);
+    }
+    return bdC;
+}
 export function simular(d) {
     return generarCuotas(d);
 }
-export async function registrar(bd, n, sesion) {
+export async function registrar(bd, n, sesion, asiento = {}) {
+    const r = await registrarEnTransaccion(bd, n, sesion, asiento);
+    olvidarEsquema(bd); // pudo crear RIP_PAGARESMONEDA
+    return r;
+}
+async function registrarEnTransaccion(bd, n, sesion, asiento) {
+    const config = await leerConfig(bd);
     const error = validar(n);
     if (error)
         throw new PagaresError(error);
@@ -89,10 +161,28 @@ export async function registrar(bd, n, sesion) {
     if (!Number.isInteger(n.mesesInteresAdelantado) || n.mesesInteresAdelantado < 0 || n.mesesInteresAdelantado > n.plazo) {
         throw new PagaresError('Los meses de intereses por adelantado no son válidos.');
     }
-    const cuentaComision = (n.cuentaComision || CUENTA_COMISION_DEFECTO).trim();
+    const cuentaComision = (n.cuentaComision || config.cuentaComision || CUENTA_COMISION_DEFECTO).trim();
     if (!/^\d{1,15}$/.test(cuentaComision))
         throw new PagaresError('La cuenta de comisión no es válida.');
     const s = await serieContable(bd, n.serie);
+    // La cuenta del pagaré y el desembolso van a la contabilidad del año de la liquidación.
+    const bdEjercicio = await bdContableDelEjercicio(bd, n.serie, n.fechaLiquidacion);
+    if (bdEjercicio)
+        s.bdContable = bdEjercicio;
+    const moneda = n.moneda ?? 'USD';
+    if (!MONEDAS.includes(moneda))
+        throw new PagaresError('Moneda no válida.');
+    let tasa = 0;
+    let cargos = [];
+    if (config.contabilizar) {
+        if (!bdEjercicio)
+            await bdContableObligatoria(bd, n.serie, n.fechaLiquidacion);
+        tasa = moneda === 'VES' ? 1 : await tasaDe(bd, n.fechaLiquidacion, asiento.tasaCambio);
+        cargos = validarCargos(asiento.cargos);
+    }
+    const montoBsIndicado = bsIndicado(asiento.montoBs, 'el desembolso');
+    const comisionBsIndicada = bsIndicado(asiento.comisionBs, 'la comisión');
+    const raiz = config.raizPagare || RAIZ_CUENTA_PAGARE;
     const banco = (await bancos(bd, n.serie)).find((b) => b.cuenta === n.cuentaBanco);
     if (!banco)
         throw new PagaresError('El banco elegido no es una cuenta 110102 de esa empresa.');
@@ -111,9 +201,9 @@ export async function registrar(bd, n, sesion) {
         let cuentaPagare = null;
         if (s.bdContable) {
             assertSafeDatabaseIdentifier(s.bdContable);
-            const sig = await req().query(`SELECT CAST(ISNULL(MAX(CAST(CODIGO AS BIGINT)) + 1, ${RAIZ_CUENTA_PAGARE}001) AS VARCHAR(20)) AS CODIGO
+            const sig = await req().query(`SELECT CAST(ISNULL(MAX(CAST(CODIGO AS BIGINT)) + 1, ${raiz}001) AS VARCHAR(20)) AS CODIGO
          FROM [${s.bdContable}].dbo.CUENTAS WITH (UPDLOCK, HOLDLOCK)
-         WHERE CODIGO LIKE '${RAIZ_CUENTA_PAGARE}%' AND LEN(LTRIM(RTRIM(CODIGO))) = 9 AND ISNUMERIC(CODIGO) = 1`);
+         WHERE CODIGO LIKE '${raiz}%' AND LEN(LTRIM(RTRIM(CODIGO))) = ${raiz.length + 3} AND ISNUMERIC(CODIGO) = 1`);
             cuentaPagare = String(sig.recordset[0].CODIGO);
             await req()
                 .input('CODIGO', sql.NVarChar(20), cuentaPagare)
@@ -169,13 +259,45 @@ export async function registrar(bd, n, sesion) {
             PAGADO, INTERESESPAGADOS, NOCOBRARINTERESES, FECHACONTABLEINTERES, PAGADOPOR, FECHAOPERACION)
           VALUES (@COD, @MES, @FV, @SALDO, @CAP, @INT, @TOTAL, 'F', @INTPAG, @NOCOBRAR, @FCI, @USUARIO, CASE WHEN @FCI IS NULL THEN NULL ELSE GETDATE() END)`);
         }
+        await guardarMoneda(req, cod, moneda);
+        // Asiento de desembolso: banco contra la cuenta del pagaré, más comisión y cargos.
+        let asientoVisible = null;
+        if (config.contabilizar && s.bdContable && cuentaPagare) {
+            const ref = `PAGARÉ #${n.pagare}`;
+            const montoBs = montoBsIndicado ?? r2c(n.monto * tasa);
+            const comisionBs = comisionBsIndicada ?? r2c((montoBs * n.comision) / 100);
+            const apuntes = [
+                { cuenta: n.cuentaBanco, comentario: ref, debe: montoBs, haber: 0 },
+                { cuenta: cuentaPagare, comentario: ref, debe: 0, haber: montoBs },
+                { cuenta: cuentaComision, comentario: `${ref} COMISION`, debe: comisionBs, haber: 0 },
+                { cuenta: n.cuentaBanco, comentario: `${ref} COMISION`, debe: 0, haber: comisionBs },
+                ...cargos.flatMap((c) => [
+                    { cuenta: cuentaComision, comentario: `${ref} ${c.descripcion}`, debe: c.monto, haber: 0 },
+                    { cuenta: n.cuentaBanco, comentario: `${ref} ${c.descripcion}`, debe: 0, haber: c.monto },
+                ]),
+            ];
+            await asegurarTabla(req);
+            const a = await postearAsiento(req, { bdContable: s.bdContable, fecha: n.fechaLiquidacion, serie: n.serie, codPagares: cod, ...sesion }, apuntes);
+            await registrarAsiento(req, {
+                codPagares: cod,
+                tipo: 'DESEMBOLSO',
+                bdContable: s.bdContable,
+                ...a,
+                fechaContable: n.fechaLiquidacion,
+                tasa,
+                montoBs,
+                codUsuario: sesion.codUsuario,
+            });
+            asientoVisible = a.asientoVisible;
+        }
         return {
             codPagares: cod,
             cuentaPagare,
+            asientoVisible,
             bdContable: s.bdContable,
             aviso: s.bdContable
                 ? null
-                : 'La base contable de esta empresa no está en este servidor: no se creó la cuenta del pagaré (210104) y el PHP no podrá contabilizar sus pagos hasta que se le asigne.',
+                : 'La base contable de esta empresa no está en este servidor: no se creó la cuenta del pagaré (210104) y sus pagos no se podrán contabilizar hasta que se le asigne.',
         };
     });
 }
@@ -184,7 +306,7 @@ const fechaSql = (iso) => {
         throw new PagaresError(`Fecha inválida: ${iso}`);
     return new Date(`${iso}T00:00:00Z`);
 };
-/** Tabla propia del Aplicativo (el PHP no la conoce); se crea al anular el primero. */
+/** Tabla propia del Aplicativo; se crea al anular el primero. */
 async function asegurarTablaAnulados(req) {
     await req().query(`IF OBJECT_ID('${TABLA_ANULADOS}', 'U') IS NULL
        CREATE TABLE ${TABLA_ANULADOS} (
@@ -208,23 +330,144 @@ async function verificarVigente(req, cod) {
     if (a.recordset[0].N)
         throw new PagaresError('El pagaré está anulado.');
 }
-export async function pagar(bd, cod, cuota, tipo, fechaContable, sesion) {
+/**
+ * Paga el capital y/o los intereses de una cuota. Si la instalación contabiliza, genera
+ * el asiento (en la contabilidad del año de la fecha contable): Debe cuenta del pagaré
+ * (capital), gasto de intereses, IGTF y otros cargos / Haber banco por el total.
+ */
+export async function pagar(bd, cod, cuota, p, sesion) {
+    if (!p.capital && !p.intereses)
+        throw new PagaresError('Indique si paga el capital, los intereses o ambos.');
+    fechaSql(p.fechaContable);
+    const config = await leerConfig(bd);
+    const cargos = validarCargos(p.cargos);
     return withTenantTransaction(bd, async (req) => {
         await verificarVigente(req, cod);
-        const sets = tipo === 'capital'
-            ? `PAGADO = 'T', FECHACONTABLE = @FC`
-            : `INTERESESPAGADOS = 'T', FECHACONTABLEINTERES = @FC`;
-        const pendiente = tipo === 'capital' ? `PAGADO <> 'T' AND ISNULL(PAGOSCAPITAL, 0) > 0` : `ISNULL(INTERESESPAGADOS, 'F') <> 'T' AND PAGOSINTERESES > 0`;
-        const r = await req()
+        const lin = await req()
             .input('COD', sql.Int, cod)
             .input('MES', sql.Int, cuota.mes)
             .input('FV', sql.Date, fechaSql(cuota.fecha))
-            .input('FC', sql.Date, fechaSql(fechaContable))
+            .query(`SELECT L.PAGADO, ISNULL(L.INTERESESPAGADOS, 'F') AS INTPAG, ISNULL(L.PAGOSCAPITAL, 0) AS CAP, L.PAGOSINTERESES AS INTE,
+                C.EMPRESA, C.CUENTABANCO, C.CUENTAPAGARE, C.PAGARE
+         FROM RIP_PAGARESLIN L WITH (UPDLOCK, HOLDLOCK) JOIN RIP_PAGARESCAB C ON C.CODPAGARES = L.NUMPAGARESCAB
+         WHERE L.NUMPAGARESCAB = @COD AND L.MES = @MES AND L.FECHAVENCIMIENTO = @FV`);
+        const l = lin.recordset[0];
+        if (!l)
+            throw new PagaresError('No se encontró la cuota.');
+        if (p.capital && (l.PAGADO === 'T' || !(Number(l.CAP) > 0)))
+            throw new PagaresError('Esa cuota no tiene capital pendiente (quizá ya se pagó).');
+        if (p.intereses && (l.INTPAG === 'T' || !(Number(l.INTE) > 0)))
+            throw new PagaresError('Esa cuota no tiene intereses pendientes (quizá ya se pagaron).');
+        const sets = [
+            p.capital ? `PAGADO = 'T', FECHACONTABLE = @FC` : '',
+            p.intereses ? `INTERESESPAGADOS = 'T', FECHACONTABLEINTERES = @FC` : '',
+        ].filter(Boolean);
+        await req()
+            .input('COD', sql.Int, cod)
+            .input('MES', sql.Int, cuota.mes)
+            .input('FV', sql.Date, fechaSql(cuota.fecha))
+            .input('FC', sql.Date, fechaSql(p.fechaContable))
             .input('USUARIO', sql.Int, sesion.codUsuario)
-            .query(`UPDATE RIP_PAGARESLIN SET ${sets}, FECHAOPERACION = GETDATE(), PAGADOPOR = @USUARIO
-         WHERE NUMPAGARESCAB = @COD AND MES = @MES AND FECHAVENCIMIENTO = @FV AND ${pendiente}`);
-        if (!r.rowsAffected[0])
-            throw new PagaresError(`Esa cuota no tiene ${tipo === 'capital' ? 'capital' : 'intereses'} pendiente (quizá ya se pagó).`);
+            .query(`UPDATE RIP_PAGARESLIN SET ${sets.join(', ')}, FECHAOPERACION = GETDATE(), PAGADOPOR = @USUARIO
+         WHERE NUMPAGARESCAB = @COD AND MES = @MES AND FECHAVENCIMIENTO = @FV`);
+        if (!config.contabilizar)
+            return { asientoVisible: null };
+        const serie = String(l.EMPRESA).trim();
+        const bdC = await bdContableObligatoria(bd, serie, p.fechaContable);
+        const moneda = await monedaDe(req, cod);
+        const tasa = moneda === 'VES' ? 1 : await tasaDe(bd, p.fechaContable, p.tasaCambio);
+        const indicados = p.montosBs ?? {};
+        if (p.capital && !l.CUENTAPAGARE)
+            throw new PagaresError('El pagaré no tiene cuenta contable (210104): no se puede contabilizar el capital.');
+        const ref = `PAGARÉ # ${l.PAGARE}`;
+        const capBs = p.capital ? (bsIndicado(indicados.capital, 'capital') ?? r2c(Number(l.CAP) * tasa)) : 0;
+        const intBs = p.intereses ? (bsIndicado(indicados.intereses, 'intereses') ?? r2c(Number(l.INTE) * tasa)) : 0;
+        const igtfBs = bsIndicado(indicados.igtf, 'IGTF') ?? r2c(((capBs + intBs) * config.tasaIgtf) / 100);
+        const totalCargos = cargos.reduce((t, c) => t + c.monto, 0);
+        const total = r2c(capBs + intBs + igtfBs + totalCargos);
+        const apuntes = [
+            { cuenta: String(l.CUENTAPAGARE ?? '').trim(), comentario: `PAGO A CAPITAL ${ref}`, debe: capBs, haber: 0 },
+            { cuenta: config.cuentaIntereses, comentario: `PAGO A INTERESES ${ref}`, debe: intBs, haber: 0 },
+            { cuenta: config.cuentaIgtf, comentario: `IGTF ${ref}`, debe: igtfBs, haber: 0 },
+            ...cargos.map((c) => ({ cuenta: config.cuentaComision, comentario: `${c.descripcion} ${ref}`, debe: c.monto, haber: 0 })),
+            { cuenta: String(l.CUENTABANCO).trim(), comentario: `PAGO ${ref}`, debe: 0, haber: total },
+        ].filter((a) => a.debe !== 0 || a.haber !== 0);
+        await asegurarTabla(req);
+        const a = await postearAsiento(req, { bdContable: bdC, fecha: p.fechaContable, serie, codPagares: cod, ...sesion }, apuntes);
+        await registrarAsiento(req, {
+            codPagares: cod,
+            tipo: 'PAGO',
+            mes: cuota.mes,
+            fechaVencimiento: cuota.fecha,
+            capital: p.capital,
+            intereses: p.intereses,
+            bdContable: bdC,
+            ...a,
+            fechaContable: p.fechaContable,
+            tasa,
+            montoBs: total,
+            codUsuario: sesion.codUsuario,
+        });
+        return { asientoVisible: a.asientoVisible };
+    });
+}
+/**
+ * Reversa un asiento generado por el Aplicativo: otro asiento con Debe y Haber
+ * invertidos, en la contabilidad del año de `fechaContable`. Si era un pago, la cuota
+ * vuelve a quedar pendiente. No borra nada.
+ */
+async function reversarEn(req, bd, id, fechaContable, sesion) {
+    const r = await req()
+        .input('ID', sql.Int, id)
+        .query(`SELECT A.*, C.EMPRESA, CONVERT(CHAR(10), A.FECHAVENCIMIENTO, 23) AS FV
+       FROM ${tablaAsientos} A WITH (UPDLOCK) JOIN RIP_PAGARESCAB C ON C.CODPAGARES = A.CODPAGARES WHERE A.ID = @ID`);
+    const reg = r.recordset[0];
+    if (!reg)
+        throw new PagaresError('No se encontró el asiento.');
+    if (reg.TIPO === 'REVERSO')
+        throw new PagaresError('Ese asiento ya es un reverso.');
+    if (reg.REVERSADOPOR)
+        throw new PagaresError('Ese asiento ya fue reversado.');
+    const serie = String(reg.EMPRESA).trim();
+    const bdC = await bdContableObligatoria(bd, serie, fechaContable);
+    const originales = await apuntesDe(req, String(reg.BDCONTABLE), Number(reg.ASIENTO));
+    if (!originales.length)
+        throw new PagaresError(`El asiento ${reg.ASIENTOVISIBLE} ya no existe en ${reg.BDCONTABLE}.`);
+    const apuntes = originales.map((a) => ({ cuenta: a.cuenta, comentario: `REVERSO ${a.comentario}`, debe: a.haber, haber: a.debe }));
+    const a = await postearAsiento(req, { bdContable: bdC, fecha: fechaContable, serie, codPagares: Number(reg.CODPAGARES), ...sesion }, apuntes);
+    const nuevo = await registrarAsiento(req, {
+        codPagares: Number(reg.CODPAGARES),
+        tipo: 'REVERSO',
+        mes: reg.MES ?? undefined,
+        fechaVencimiento: reg.FV ?? undefined,
+        capital: Boolean(reg.CAPITAL),
+        intereses: Boolean(reg.INTERESES),
+        bdContable: bdC,
+        ...a,
+        fechaContable,
+        tasa: Number(reg.TASA),
+        montoBs: Number(reg.MONTOBS),
+        codUsuario: sesion.codUsuario,
+    });
+    await req().input('ID', sql.Int, id).input('NUEVO', sql.Int, nuevo).query(`UPDATE ${tablaAsientos} SET REVERSADOPOR = @NUEVO WHERE ID = @ID`);
+    if (reg.TIPO === 'PAGO') {
+        const sets = [
+            reg.CAPITAL ? `PAGADO = 'F', FECHACONTABLE = NULL` : '',
+            reg.INTERESES ? `INTERESESPAGADOS = 'F', FECHACONTABLEINTERES = NULL` : '',
+        ].filter(Boolean);
+        await req()
+            .input('COD', sql.Int, Number(reg.CODPAGARES))
+            .input('MES', sql.Int, Number(reg.MES))
+            .input('FV', sql.Date, fechaSql(String(reg.FV)))
+            .query(`UPDATE RIP_PAGARESLIN SET ${sets.join(', ')} WHERE NUMPAGARESCAB = @COD AND MES = @MES AND FECHAVENCIMIENTO = @FV`);
+    }
+    return { asientoVisible: a.asientoVisible };
+}
+export async function reversar(bd, id, fechaContable, sesion) {
+    fechaSql(fechaContable);
+    return withTenantTransaction(bd, async (req) => {
+        await asegurarTabla(req);
+        return reversarEn(req, bd, id, fechaContable, sesion);
     });
 }
 async function lineas(req, cod) {
@@ -367,6 +610,16 @@ export async function anular(bd, cod, motivo, sesion) {
                     AND ISNULL(L.FECHACONTABLEINTERES, '19000101') <> C.FECHA))`);
         if (pagos.recordset[0].N > 0)
             throw new PagaresError('El pagaré tiene cuotas pagadas: no se puede anular.');
+        // Si el Aplicativo contabilizó el desembolso, se reversa con fecha de hoy.
+        await asegurarTabla(req);
+        const desembolsos = await req()
+            .input('COD', sql.Int, cod)
+            .query(`SELECT ID FROM ${tablaAsientos} WHERE CODPAGARES = @COD AND TIPO = 'DESEMBOLSO' AND REVERSADOPOR IS NULL`);
+        const hoy = new Date().toISOString().slice(0, 10);
+        for (const d of desembolsos.recordset) {
+            // eslint-disable-next-line no-await-in-loop
+            await reversarEn(req, bd, d.ID, hoy, sesion);
+        }
         await req()
             .input('COD', sql.Int, cod)
             .input('USUARIO', sql.Int, sesion.codUsuario)

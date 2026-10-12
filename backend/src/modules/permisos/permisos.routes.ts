@@ -2,7 +2,14 @@ import type { FastifyInstance } from 'fastify';
 import type { FastifyRequest } from 'fastify';
 import { esSupervisor, requireAdminPermisos, requireSupervisor } from '../../shared/auth/permisos.js';
 import { MODULO_CAJAS, MODULOS } from '../../shared/auth/modulos.js';
-import { ActivacionError, estadoModulos, guardarActivacion, modulosActivos } from '../../shared/auth/activacion.js';
+import {
+  ActivacionError,
+  estadoModulos,
+  excepcionesPorEmpresa,
+  guardarActivacion,
+  modulosActivosEnAlguna,
+} from '../../shared/auth/activacion.js';
+import { generalPool, generalPoolConnect } from '../../shared/db/general-pool.js';
 import { updatePermisosBodySchema, type UpdatePermisosBody } from './permisos.schema.js';
 import {
   listUsuariosConPermisos,
@@ -30,17 +37,41 @@ export default async function permisosRoutes(fastify: FastifyInstance) {
 
   fastify.get('/api/config/permisos', administradores, async (req) => listUsuariosConPermisos(administrador(req)));
 
-  /** Módulos asignables (solo los activos en la instalación) y si el cierre está activo. */
+  /**
+   * Módulos asignables (los activos en al menos una empresa: lo general o una excepción)
+   * y si el cierre está activo en alguna.
+   */
   fastify.get('/api/config/modulos', administradores, async () => {
-    const activos = await modulosActivos();
+    const activos = await modulosActivosEnAlguna();
     return { modulos: MODULOS.filter((m) => activos.has(m.id)), cajasActivo: activos.has(MODULO_CAJAS) };
   });
 
-  /** Módulos de la instalación (grupo económico): qué existe en este cliente. */
-  fastify.get('/api/config/modulos-activos', soloSupervisor, async () => estadoModulos());
+  /**
+   * Módulos de la instalación: lo general, o con `codEmpresa` lo que vale para esa
+   * empresa (con sus excepciones).
+   */
+  fastify.get<{ Querystring: { codEmpresa?: number } }>(
+    '/api/config/modulos-activos',
+    { ...soloSupervisor, schema: { querystring: { type: 'object', properties: { codEmpresa: { type: 'integer' } } } } },
+    async (req) => estadoModulos(req.query.codEmpresa),
+  );
 
-  // Auditoría: "Módulos de la instalación", con los cambios (antes → después).
-  fastify.put<{ Body: { items: { id: string; activo: boolean }[] } }>(
+  /** Empresas de la instalación, con cuántas excepciones de módulos tiene cada una. */
+  fastify.get('/api/config/modulos-empresas', soloSupervisor, async () => {
+    await generalPoolConnect;
+    const [r, excepciones] = await Promise.all([
+      generalPool.request().query('SELECT CODEMPRESA, TITULO FROM dbo.EMPRESAS ORDER BY TITULO'),
+      excepcionesPorEmpresa(),
+    ]);
+    return r.recordset.map((f) => ({
+      codEmpresa: Number(f.CODEMPRESA),
+      titulo: String(f.TITULO ?? '').trim(),
+      excepciones: excepciones[Number(f.CODEMPRESA)] ?? 0,
+    }));
+  });
+
+  // Auditoría: "Módulos de la instalación", con los cambios (antes → después) y la empresa.
+  fastify.put<{ Body: { codEmpresa?: number; items: { id: string; activo: boolean | null }[] } }>(
     '/api/config/modulos-activos',
     {
       ...soloSupervisor,
@@ -49,13 +80,15 @@ export default async function permisosRoutes(fastify: FastifyInstance) {
           type: 'object',
           required: ['items'],
           properties: {
+            /** Sin empresa: lo general. Con empresa: sus excepciones (activo null = hereda). */
+            codEmpresa: { type: 'integer' },
             items: {
               type: 'array',
               maxItems: 100,
               items: {
                 type: 'object',
                 required: ['id', 'activo'],
-                properties: { id: { type: 'string', maxLength: 50 }, activo: { type: 'boolean' } },
+                properties: { id: { type: 'string', maxLength: 50 }, activo: { type: ['boolean', 'null'] } },
               },
             },
           },
@@ -64,8 +97,8 @@ export default async function permisosRoutes(fastify: FastifyInstance) {
     },
     async (req, reply) => {
       try {
-        const cambios = await guardarActivacion(req.body.items, req.user!.usuario ?? null);
-        return { ok: true, cambios };
+        const cambios = await guardarActivacion(req.body.items, req.user!.usuario ?? null, req.body.codEmpresa);
+        return { ok: true, codEmpresa: req.body.codEmpresa ?? null, cambios };
       } catch (err) {
         if (err instanceof ActivacionError) return reply.status(400).send({ error: 'BadRequest', message: err.message });
         throw err;

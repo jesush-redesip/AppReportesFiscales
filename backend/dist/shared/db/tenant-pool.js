@@ -184,8 +184,18 @@ export async function queryTenantMulti(database, sqlText, params = {}) {
  */
 export async function withTenantTransaction(database, fn) {
     const enCurso = await transaccionSimulacro(database);
-    if (enCurso)
-        return fn(() => new sql.Request(enCurso)); // la revierte enSimulacro
+    if (enCurso) {
+        // Como en la realidad: si la operación falla se deshace solo lo suyo (la transacción
+        // completa la revierte enSimulacro al final).
+        await new sql.Request(enCurso).query('SAVE TRANSACTION simulacro_op');
+        try {
+            return await fn(() => new sql.Request(enCurso));
+        }
+        catch (err) {
+            await new sql.Request(enCurso).query('IF XACT_STATE() = 1 ROLLBACK TRANSACTION simulacro_op');
+            throw err;
+        }
+    }
     const pool = await getConnectedPool(database);
     const transaction = new sql.Transaction(pool);
     await transaction.begin();

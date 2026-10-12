@@ -1,16 +1,18 @@
 import sql from 'mssql';
 import { generalPool, generalPoolConnect } from '../../shared/db/general-pool.js';
 import { assertSafeDatabaseIdentifier, queryTenantRaw } from '../../shared/db/tenant-pool.js';
-/**
- * Las cuentas de sobrante/faltante son cuentas de resultado; en el plan de cuentas de
- * ICG de estos clientes ese grupo empieza por "7". Filtro pedido explícitamente para
- * que la lista desplegable no muestre el plan completo.
- */
-const PREFIJO_CUENTAS = '7';
+import { buscarCuentas } from '../../shared/db/plan-cuentas.js';
 export class BaseContableInvalidaError extends Error {
     constructor(bd) {
         super(`La base de datos contable "${bd}" no está registrada en GENERAL.dbo.EMPRESASCONTABLES.`);
         this.name = 'BaseContableInvalidaError';
+    }
+}
+/** Una cuenta configurada no existe en la base contable elegida. */
+export class CuentaInexistenteError extends Error {
+    constructor(bd, cuentas) {
+        super(`Estas cuentas no existen (o son "Cuenta indefinida") en la base contable ${bd}: ${cuentas.join(', ')}.`);
+        this.name = 'CuentaInexistenteError';
     }
 }
 /** Extrae el nombre de BD de un PATHBD "host:BD" (igual criterio que auth.repository). */
@@ -61,14 +63,15 @@ async function assertBaseContablePermitida(bd) {
         throw new BaseContableInvalidaError(bd);
     assertSafeDatabaseIdentifier(bd);
 }
-/** Cuentas de la base contable elegida cuyo código empieza por "7". */
-export async function listarCuentasContables(bdContable) {
+/**
+ * Busca en el plan de cuentas de la base contable elegida: por código o por nombre
+ * (`q`), o las cuentas indicadas (`codigos`, para mostrar el título de las ya
+ * configuradas). Cualquier grupo de cuentas: no se asume que sobrantes y faltantes
+ * estén en el 7 (hay clientes que usan el 6 u otras).
+ */
+export async function listarCuentasContables(bdContable, q = '', codigos = []) {
     await assertBaseContablePermitida(bdContable);
-    const rows = await queryTenantRaw(bdContable, `SELECT CODIGO, TITULO FROM dbo.CUENTAS WHERE CODIGO LIKE @PREFIJO ORDER BY CODIGO`, { PREFIJO: { type: () => sql.NVarChar(13), value: `${PREFIJO_CUENTAS}%` } });
-    return rows.map((r) => ({
-        codigo: String(r.CODIGO ?? '').trim(),
-        titulo: String(r.TITULO ?? '').trim(),
-    }));
+    return buscarCuentas(bdContable, q, codigos);
 }
 /**
  * La configuración vive ahora en la base de GESTIÓN (la del tenant, la misma de
@@ -148,6 +151,18 @@ export async function updateConfiguracionCuentas(bd, data) {
     await ensureTabla(bd);
     if (data.bdContable)
         await assertBaseContablePermitida(data.bdContable);
+    // Las cuentas elegidas deben existir en esa base contable (o quedar sin asignar).
+    const elegidas = [data.sobranteVenta, data.faltanteVenta, data.sobranteRedondeo, data.faltanteRedondeo]
+        .map((c) => (c ?? '').trim())
+        .filter(Boolean);
+    if (elegidas.length) {
+        if (!data.bdContable)
+            throw new CuentaInexistenteError('(sin elegir)', elegidas);
+        const existen = new Set((await buscarCuentas(data.bdContable, '', elegidas)).map((c) => c.codigo));
+        const faltan = [...new Set(elegidas.filter((c) => !existen.has(c)))];
+        if (faltan.length)
+            throw new CuentaInexistenteError(data.bdContable, faltan);
+    }
     const conteo = await queryTenantRaw(bd, 'SELECT COUNT(*) AS N FROM dbo.RIP_CONFIGURACIONCUENTAS');
     const n = conteo[0]?.N ?? 0;
     if (n > 1) {

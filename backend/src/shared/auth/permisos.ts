@@ -55,7 +55,7 @@ export async function getPermisosUsuario(codUsuario: number): Promise<PermisosCa
 export function requirePermiso(flag: PermisoFlag) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     // Las tres banderas son del Cierre de Caja: si la instalación no lo tiene, nadie pasa.
-    if (!(await estaActivo(MODULO_CAJAS))) {
+    if (!(await estaActivo(MODULO_CAJAS, request.user!.codEmpresa))) {
       return reply.status(403).send({ error: 'Forbidden', message: MSJ_CAJAS_INACTIVO });
     }
     const permisos = await getPermisosUsuario(request.user!.codUsuario);
@@ -156,8 +156,8 @@ export async function reemplazarModulosUsuario(
 export function requireModulo(modulo: ModuloId) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const codUsuario = request.user!.codUsuario;
-    if (!(await estaActivo(modulo))) {
-      return reply.status(403).send({ error: 'Forbidden', message: 'Este módulo no está activo en esta instalación.' });
+    if (!(await estaActivo(modulo, request.user!.codEmpresa))) {
+      return reply.status(403).send({ error: 'Forbidden', message: 'Este módulo no está activo para esta empresa.' });
     }
     const modulos = await getModulosUsuario(codUsuario);
     if (!modulos.includes(modulo)) {
@@ -174,7 +174,7 @@ export function requireModulo(modulo: ModuloId) {
  */
 export async function requireConfiguracionCajas(request: FastifyRequest, reply: FastifyReply) {
   const codUsuario = request.user!.codUsuario;
-  if (!(await estaActivo(MODULO_CAJAS))) {
+  if (!(await estaActivo(MODULO_CAJAS, request.user!.codEmpresa))) {
     return reply.status(403).send({ error: 'Forbidden', message: MSJ_CAJAS_INACTIVO });
   }
   const [permisos, modulos] = await Promise.all([getPermisosUsuario(codUsuario), getModulosUsuario(codUsuario)]);
@@ -229,12 +229,12 @@ export interface AccesoEfectivo {
   supervisorInterno: boolean;
 }
 
-/** Acceso real del usuario, para la sesión del frontend (menú y rutas). */
-export async function accesoEfectivo(codUsuario: number): Promise<AccesoEfectivo> {
+/** Acceso real del usuario en una empresa, para la sesión del frontend (menú y rutas). */
+export async function accesoEfectivo(codUsuario: number, codEmpresa?: number): Promise<AccesoEfectivo> {
   const [permisos, asignados, activos] = await Promise.all([
     getPermisosUsuario(codUsuario),
     getModulosUsuario(codUsuario),
-    modulosActivos(),
+    modulosActivos(codEmpresa),
   ]);
   const cajasActivo = activos.has(MODULO_CAJAS);
   const supervisorInterno = tieneSupervisorInterno(codUsuario, asignados);

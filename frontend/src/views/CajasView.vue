@@ -6,6 +6,7 @@ import { useDebugStore, type DiagnosticoGrupo } from '../stores/debug.store';
 import type { CierreCajaLinea, FormaPagoDisponible, ResultadoContabilizar, Tienda } from '../lib/types';
 import BaseModal from '../components/BaseModal.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
+import { api } from '../lib/api';
 
 const cajas = useCajas();
 // Instancia propia para la cotización: su error (o su spinner) no debe mezclarse con
@@ -15,6 +16,8 @@ const cajasCotizacion = useCajas();
 const auth = useAuthStore();
 
 const tiendas = ref<Tienda[]>([]);
+/** En la lista, las cajas (serie de 3 caracteres) van sangradas debajo de su tienda. */
+const etiquetaTienda = (t: Tienda) => (t.serie.trim().length > 2 ? '\u00a0\u00a0\u00a0\u00a0\u00a0' : '') + t.descripcion;
 const serie = ref('');
 const fecha = ref(''); // yyyy-MM-dd (input nativo)
 const cierre = ref<CierreCajaLinea[]>([]);
@@ -241,6 +244,8 @@ onUnmounted(() => debug.quitarDiagnostico('Cierre de Caja'));
 // --- Ventana de resultado al contabilizar ---
 interface ResultadoAsiento {
   ok: boolean;
+  /** Título de la ventana (por defecto "Contabilización" / "Contabilización fallida"). */
+  encabezado?: string;
   titulo: string;
   datos: { etiqueta: string; valor: string }[];
   nota: string;
@@ -310,6 +315,74 @@ async function accionContabilizarCierre(tipo: '1' | '3') {
   }
 }
 
+interface AsientoRegistrado {
+  asiento: number;
+  asientoVisible: number | null;
+  tipo: string;
+  procesadoPor: string;
+  registrado: string | null;
+  debe: number;
+}
+const resumenCargando = ref<string | null>(null);
+
+/** Resumen de un cierre ya contabilizado: el mismo que se ve al contabilizarlo. */
+async function verResumen(g: GrupoCierre) {
+  resumenCargando.value = claveGrupo(g);
+  try {
+    const r = await api.get<{ asientos: AsientoRegistrado[]; resumen: { caja: string; cajero: string; z: number; facturas: number; notasCredito: number } | null }>(
+      '/api/cajas/resumen-contabilizado',
+      { serie: serie.value, serieCaja: g.serieCaja, fecha: toYyyyMMdd(fecha.value), z: g.z },
+    );
+    const respaldo = separarCaja(g.caja);
+    const res = r.resumen;
+    const numero = (n: number) => n.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const datosAsientos: Dato[] = r.asientos.flatMap((a) => {
+      const sufijo = r.asientos.length > 1 ? ` (${a.tipo === 'Cierre de caja' ? 'cierre' : 'compras'})` : '';
+      return [
+        { etiqueta: `Asiento${sufijo}`, valor: String(a.asiento) },
+        ...(a.asientoVisible != null ? [{ etiqueta: `Asiento visible${sufijo}`, valor: String(a.asientoVisible) }] : []),
+      ];
+    });
+    const procesados = [...new Set(r.asientos.map((a) => a.procesadoPor).filter(Boolean))];
+    const registrado = r.asientos.map((a) => a.registrado).find(Boolean);
+    resultadoAsiento.value = {
+      ok: r.asientos.length > 0,
+      encabezado: 'Cierre contabilizado',
+      titulo: r.asientos.length ? 'Este cierre ya está contabilizado' : 'No se encontró el asiento de este cierre',
+      datos: [
+        ...datosAsientos,
+        { etiqueta: 'Tipo', valor: r.asientos.map((a) => a.tipo).join(' y ') || '—' },
+        { etiqueta: 'Caja', valor: res?.caja || respaldo.caja },
+        { etiqueta: 'Cajero', valor: res?.cajero || respaldo.cajero || '—' },
+        { etiqueta: 'Z', valor: String(res?.z ?? g.z) },
+        { etiqueta: 'Fecha', valor: fechaLegible(fecha.value) },
+        ...(res
+          ? [
+              { etiqueta: 'Facturas', valor: String(res.facturas) },
+              { etiqueta: 'Notas de crédito', valor: String(res.notasCredito) },
+            ]
+          : []),
+        ...r.asientos.map((a) => ({ etiqueta: r.asientos.length > 1 ? `Monto (${a.tipo})` : 'Monto del asiento', valor: numero(a.debe) })),
+        ...(procesados.length ? [{ etiqueta: 'Procesado por', valor: procesados.join(', ') }] : []),
+        ...(registrado ? [{ etiqueta: 'Contabilizado el', valor: registrado }] : []),
+      ],
+      nota: r.asientos.length
+        ? ''
+        : 'El cierre figura como contabilizado, pero no se encontró su asiento en la contabilidad con esa fecha y caja (quizá se contabilizó con otra fecha contable).',
+    };
+  } catch (e) {
+    resultadoAsiento.value = {
+      ok: false,
+      encabezado: 'Cierre contabilizado',
+      titulo: 'No se pudo consultar el resumen',
+      datos: [],
+      nota: e instanceof Error ? e.message : 'Error de comunicación con el servidor.',
+    };
+  } finally {
+    resumenCargando.value = null;
+  }
+}
+
 async function accionDescontabilizarCierre(g: GrupoCierre) {
   if (!confirm(`¿Descontabilizar el cierre de ${g.caja}? Esto revierte el asiento contable.`)) return;
   const r = await cajas.descontabilizar({ serie: serie.value, serieCaja: g.serieCaja, fecha: toYyyyMMdd(fecha.value), z: g.z });
@@ -332,7 +405,7 @@ async function accionTraspasar(g: GrupoCierre) {
         <label>Tienda</label>
         <select v-model="serie" @change="cargar">
           <option value="" disabled>Seleccionar...</option>
-          <option v-for="t in tiendas" :key="t.serie" :value="t.serie">{{ t.descripcion }}</option>
+          <option v-for="t in tiendas" :key="t.serie" :value="t.serie">{{ etiquetaTienda(t) }}</option>
         </select>
       </div>
       <div class="campo">
@@ -379,6 +452,15 @@ async function accionTraspasar(g: GrupoCierre) {
             >
               <span v-if="asientoCargando === claveGrupo(g)" class="spinner" aria-hidden="true"></span>
               {{ asientoCargando === claveGrupo(g) ? 'Cargando asiento...' : 'Ver Asiento' }}
+            </button>
+            <button
+              v-if="g.contabilizado"
+              type="button"
+              class="secundario"
+              :disabled="resumenCargando !== null"
+              @click="verResumen(g)"
+            >
+              {{ resumenCargando === claveGrupo(g) ? 'Cargando resumen...' : 'Ver Resumen' }}
             </button>
             <button
               v-if="g.contabilizado && auth.permisos.descontabilizar"
@@ -529,7 +611,7 @@ async function accionTraspasar(g: GrupoCierre) {
     <!-- Resultado de contabilizar (cierre o compras). -->
     <BaseModal
       :open="resultadoAsiento !== null"
-      :title="resultadoAsiento?.ok ? 'Contabilización' : 'Contabilización fallida'"
+      :title="resultadoAsiento?.encabezado ?? (resultadoAsiento?.ok ? 'Contabilización' : 'Contabilización fallida')"
       ancho="440px"
       @close="resultadoAsiento = null"
     >

@@ -30,6 +30,7 @@ import {
 } from './cajas.repository.js';
 import {
   contabilizar,
+  resumenContabilizado,
   descontabilizarCierre,
   descontabilizarDeposito,
   eliminarFormaPago,
@@ -59,6 +60,33 @@ export default async function cajasRoutes(fastify: FastifyInstance) {
     '/api/cajas/asiento',
     { ...soloVerCajas, schema: { querystring: asientoQuerySchema } },
     async (req) => getAsiento(req.user!.bd, req.query.tipo, req.query.serie, req.query.serieCaja, req.query.fecha, req.query.z),
+  );
+
+  /** Resumen de un cierre ya contabilizado (asientos, caja, cajero, Z, documentos). */
+  fastify.get<{ Querystring: { serie: string; serieCaja: string; fecha: string; z: string } }>(
+    '/api/cajas/resumen-contabilizado',
+    {
+      ...soloVerCajas,
+      schema: {
+        querystring: {
+          type: 'object',
+          required: ['serie', 'serieCaja', 'fecha', 'z'],
+          properties: {
+            serie: { type: 'string', minLength: 1, maxLength: 4 },
+            serieCaja: { type: 'string', minLength: 1, maxLength: 10 },
+            fecha: { type: 'string', pattern: '^[0-9]{8}$' },
+            z: { type: 'string', pattern: '^[0-9]+$' },
+          },
+        },
+      },
+    },
+    async (req) =>
+      resumenContabilizado(req.user!.bd, {
+        serie: req.query.serie,
+        serieCaja: req.query.serieCaja,
+        fecha: req.query.fecha,
+        z: Number(req.query.z),
+      }),
   );
 
   fastify.get<{ Querystring: { caja: string; z: string } }>(

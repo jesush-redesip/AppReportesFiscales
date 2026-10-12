@@ -7,6 +7,7 @@ import BaseModal from '../components/BaseModal.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
 import DetallePagare from '../components/pagares/DetallePagare.vue';
 import RegistrarPagare from '../components/pagares/RegistrarPagare.vue';
+import ConfigContablePagares from '../components/pagares/ConfigContablePagares.vue';
 import { useAuthStore } from '../stores/auth.store';
 import { PERMISO_PAGARES_GESTION } from '../lib/reportes';
 
@@ -55,6 +56,8 @@ const filtros = reactive({
   empresa: '',
   banco: '',
   buscar: '',
+  /** USD por defecto: los totales solo tienen sentido en una moneda. */
+  moneda: 'USD' as '' | 'USD' | 'VES',
 });
 const pestana = ref<(typeof PESTANAS)[number]['id']>('general');
 const porBanco = ref(false);
@@ -90,6 +93,7 @@ function parametros(): Record<string, string | undefined> {
     series: filtros.empresa || undefined,
     banco: filtros.banco || undefined,
     buscar: filtros.buscar.trim() || undefined,
+    moneda: filtros.moneda || undefined,
   };
 }
 
@@ -127,7 +131,11 @@ function propsTabla(columnas: Columna[], filas: Fila[]) {
     textColumns: columnas.filter((c) => c.tipo === 'texto' || c.tipo === 'fecha').map((c) => c.id),
     integerColumns: columnas.filter((c) => c.tipo === 'entero').map((c) => c.id),
     noTotalColumns: columnas.filter((c) => c.sinTotal || c.tipo === 'tasa').map((c) => c.id),
-    rows: fechas.length ? filas.map((f) => ({ ...f, ...Object.fromEntries(fechas.map((id) => [id, ddmmyyyy(f[id])])) })) : filas,
+    rows: filas.map((f) => ({
+      ...f,
+      ...Object.fromEntries(fechas.map((id) => [id, ddmmyyyy(f[id])])),
+      ...('MONEDA' in f ? { MONEDA: f.MONEDA === 'VES' ? 'Bs' : f.MONEDA } : {}),
+    })),
   };
 }
 const tabla = computed(() => (resultado.value ? propsTabla(resultado.value.columnas, resultado.value.filas) : null));
@@ -169,10 +177,11 @@ function anulado() {
 }
 
 const registrando = ref(false);
+const configurando = ref(false);
 const avisoRegistro = ref('');
-async function registrado(r: { codPagares: number; aviso: string | null }) {
+async function registrado(r: { codPagares: number; aviso: string | null; asientoVisible: number | null }) {
   registrando.value = false;
-  avisoRegistro.value = r.aviso ? `Pagaré registrado. ${r.aviso}` : 'Pagaré registrado.';
+  avisoRegistro.value = `Pagaré registrado.${r.asientoVisible ? ` Asiento ${r.asientoVisible}.` : ''}${r.aviso ? ` ${r.aviso}` : ''}`;
   // Los catálogos pueden traer un banco o empresa nuevos.
   try {
     const c = await api.get<{ empresas: Empresa[]; bancos: string[] }>(`${BASE}/catalogos`);
@@ -190,11 +199,15 @@ async function registrado(r: { codPagares: number; aviso: string | null }) {
     <h1>Pagarés</h1>
     <p class="ayuda">
       Préstamos bancarios de la empresa documentados con pagarés: cuotas del período, lo vencido sin pagar y la deuda por
-      banco. Haga clic en un pagaré para ver su tabla de amortización.
+      banco. Cada pagaré está en USD (crédito indexado, lo normal) o en Bs; los asientos se registran en bolívares (los de
+      USD a la tasa del día). Haga clic en un pagaré para ver su tabla de amortización.
     </p>
 
     <div v-if="puedeGestionar" class="barra-gestion">
       <button type="button" @click="(registrando = true), (avisoRegistro = '')">+ Registrar pagaré</button>
+      <button v-if="auth.puedeAdministrarPermisos" type="button" class="secundario" @click="configurando = true">
+        <AppIcon name="settings" :size="15" /> Configuración contable
+      </button>
       <span v-if="avisoRegistro" class="exito">{{ avisoRegistro }}</span>
     </div>
 
@@ -240,6 +253,14 @@ async function registrado(r: { codPagares: number; aviso: string | null }) {
           <select v-model="filtros.banco">
             <option value="">Todos</option>
             <option v-for="b in bancos" :key="b" :value="b">{{ b }}</option>
+          </select>
+        </label>
+        <label class="campo">
+          Moneda
+          <select v-model="filtros.moneda">
+            <option value="USD">USD</option>
+            <option value="VES">Bs</option>
+            <option value="">Todas</option>
           </select>
         </label>
         <label v-if="pestana !== 'consolidado' && pestana !== 'pagos'" class="campo">
@@ -295,6 +316,7 @@ async function registrado(r: { codPagares: number; aviso: string | null }) {
         @anulado="anulado"
       />
     </BaseModal>
+    <ConfigContablePagares v-if="configurando" @cerrar="configurando = false" />
     <RegistrarPagare v-if="registrando" @cerrar="registrando = false" @guardado="registrado" />
   </section>
 </template>

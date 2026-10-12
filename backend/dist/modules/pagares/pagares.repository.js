@@ -12,7 +12,9 @@ import { queryTenantRaw } from '../../shared/db/tenant-pool.js';
  *    SERIES.CONTABILIDADB. Se agrupan por empresa contable, que reemplaza los grupos que
  *    el PHP tenía fijos en el código (BB = BB/BG/BJ...).
  *  - Banco: el título de la cuenta contable 110102* (CODBANCO), igual que en el PHP.
- *  - Importes tal como se registraron (sin conversión de moneda).
+ *  - Importes tal como se registraron, en la moneda del pagaré: USD (créditos indexados,
+ *    lo normal) o Bs. La moneda la guarda el Aplicativo en RIP_PAGARESMONEDA (el PHP no
+ *    la tenía); sin fila = USD.
  */
 export class PagaresError extends Error {
     constructor(message) {
@@ -20,6 +22,7 @@ export class PagaresError extends Error {
         this.name = 'PagaresError';
     }
 }
+export const MONEDAS = ['USD', 'VES'];
 const p = (type, value) => ({ type, value });
 const esquemas = new Map();
 async function esquema(bd) {
@@ -27,7 +30,7 @@ async function esquema(bd) {
     if (cache && Date.now() - cache.hora < 10 * 60_000)
         return cache.esquema;
     const filas = await queryTenantRaw(bd, `SELECT T.TABLA, C.name AS COLUMNA
-     FROM (VALUES ('RIP_PAGARESCAB'), ('RIP_PAGARESLIN'), ('RIP_PAGARESANULADOS')) AS T(TABLA)
+     FROM (VALUES ('RIP_PAGARESCAB'), ('RIP_PAGARESLIN'), ('RIP_PAGARESANULADOS'), ('RIP_PAGARESMONEDA')) AS T(TABLA)
      LEFT JOIN sys.columns C ON C.object_id = OBJECT_ID(T.TABLA)`);
     const cab = new Set(filas.filter((f) => f.TABLA === 'RIP_PAGARESCAB' && f.COLUMNA).map((f) => f.COLUMNA.toUpperCase()));
     const lin = new Set(filas.filter((f) => f.TABLA === 'RIP_PAGARESLIN' && f.COLUMNA).map((f) => f.COLUMNA.toUpperCase()));
@@ -40,11 +43,12 @@ async function esquema(bd) {
         fechaContableInteres: lin.has('FECHACONTABLEINTERES'),
         frecuenciaIntereses: cab.has('FRECUENCIAPAGOINTERESES'),
         anulados: filas.some((f) => f.TABLA === 'RIP_PAGARESANULADOS' && f.COLUMNA),
+        moneda: filas.some((f) => f.TABLA === 'RIP_PAGARESMONEDA' && f.COLUMNA),
     };
     esquemas.set(bd, { esquema: e, hora: Date.now() });
     return e;
 }
-/** Después de crear RIP_PAGARESANULADOS. */
+/** Después de crear RIP_PAGARESANULADOS o RIP_PAGARESMONEDA. */
 export function olvidarEsquema(bd) {
     esquemas.delete(bd);
 }
@@ -73,6 +77,11 @@ function cteCabecera(f, params, e) {
         condiciones.push('C.CODBANCO COLLATE DATABASE_DEFAULT = @BANCO');
         params.BANCO = p(() => sql.NVarChar(200), f.banco);
     }
+    const monedaSql = e.moneda ? "ISNULL(PM.MONEDA, 'USD')" : "'USD'";
+    if (f.moneda) {
+        condiciones.push(`${monedaSql} = @MONEDA`);
+        params.MONEDA = p(() => sql.NVarChar(3), f.moneda);
+    }
     if (f.buscar?.trim()) {
         condiciones.push('CAST(C.PAGARE AS NVARCHAR(40)) LIKE @BUSCAR');
         params.BUSCAR = p(() => sql.NVarChar(60), `%${f.buscar.trim().replace(/[[%_]/g, '[$&]')}%`);
@@ -86,8 +95,10 @@ function cteCabecera(f, params, e) {
                     C.EMPRESA COLLATE DATABASE_DEFAULT) AS EMPRESA,
            C.FECHA, C.PLAZO, C.FRECUENCIAPAGO AS FRECUENCIA,
            CONVERT(DECIMAL(9, 4), ISNULL(C.TASA, 0)) AS TASA,
-           CONVERT(DECIMAL(19, 4), ISNULL(C.MONTO, 0)) AS MONTO
+           CONVERT(DECIMAL(19, 4), ISNULL(C.MONTO, 0)) AS MONTO,
+           ${monedaSql} AS MONEDA
     FROM RIP_PAGARESCAB C WITH (NOLOCK)
+    ${e.moneda ? 'LEFT JOIN RIP_PAGARESMONEDA PM WITH (NOLOCK) ON PM.CODPAGARES = C.CODPAGARES' : ''}
     LEFT JOIN SERIES S WITH (NOLOCK) ON S.SERIE COLLATE DATABASE_DEFAULT = C.EMPRESA COLLATE DATABASE_DEFAULT
     LEFT JOIN GENERAL.dbo.EMPRESASCONTABLES EC WITH (NOLOCK)
       ON EC.CODIGO = TRY_CAST(SUBSTRING(S.CONTABILIDADB, 6, 3) AS INT)
@@ -142,7 +153,7 @@ export async function general(bd, f, desde, hasta) {
               MAX(L.FV) AS VENCE,
               MIN(CASE WHEN ${PENDIENTE} THEN L.FV END) AS PROXIMO
        FROM L GROUP BY L.COD)
-     SELECT CB.COD AS CODPAGARES, CB.PAGARE, CB.EMPRESA, CB.BANCO, ${fechaIso('CB.FECHA')} AS FECHA,
+     SELECT CB.COD AS CODPAGARES, CB.PAGARE, CB.EMPRESA, CB.BANCO, CB.MONEDA, ${fechaIso('CB.FECHA')} AS FECHA,
             ${fechaIso('A.VENCE')} AS VENCE, CB.PLAZO, CB.FRECUENCIA, CB.TASA, CB.MONTO,
             A.CAPITAL_PAGADO, A.SALDO, ${fechaIso('A.PROXIMO')} AS PROXIMO,
             A.CAPITAL, A.INTERESES, A.CAPITAL + A.INTERESES AS TOTAL
@@ -168,7 +179,7 @@ export async function deudas(bd, f, corte) {
               MIN(L.FV) AS DESDE
        FROM L WHERE L.FV <= @CORTE AND ${PENDIENTE}
        GROUP BY L.COD)
-     SELECT CB.COD AS CODPAGARES, CB.PAGARE, CB.EMPRESA, CB.BANCO, CB.MONTO, A.SALDO,
+     SELECT CB.COD AS CODPAGARES, CB.PAGARE, CB.EMPRESA, CB.BANCO, CB.MONEDA, CB.MONTO, A.SALDO,
             V.CUOTAS, ${fechaIso('V.DESDE')} AS DESDE, DATEDIFF(DAY, V.DESDE, @CORTE) AS DIAS,
             V.CAPITAL, V.INTERESES, V.CAPITAL + V.INTERESES AS TOTAL
      FROM CB JOIN V ON V.COD = CB.COD JOIN A ON A.COD = CB.COD
@@ -181,7 +192,7 @@ export async function pagosPeriodo(bd, f, desde, hasta) {
     fechaParam(params, 'DESDE', desde);
     fechaParam(params, 'HASTA', hasta);
     return queryTenantRaw(bd, `WITH ${cteLineas(e)}, ${cteCabecera(f, params, e)}
-     SELECT CB.EMPRESA, CB.BANCO, COUNT(DISTINCT CB.COD) AS PAGARES,
+     SELECT CB.EMPRESA, CB.BANCO, CB.MONEDA, COUNT(DISTINCT CB.COD) AS PAGARES,
             SUM(CASE WHEN L.CAPPAG = 0 THEN L.CAP ELSE 0 END) AS CAPITAL,
             SUM(CASE WHEN L.INTPAG = 0 THEN L.INTE ELSE 0 END) AS INTERESES,
             SUM(CASE WHEN L.CAPPAG = 0 THEN L.CAP ELSE 0 END) + SUM(CASE WHEN L.INTPAG = 0 THEN L.INTE ELSE 0 END) AS TOTAL,
@@ -189,14 +200,14 @@ export async function pagosPeriodo(bd, f, desde, hasta) {
             SUM(CASE WHEN L.INTPAG = 1 THEN L.INTE ELSE 0 END) AS INTERESES_PAGADOS
      FROM CB JOIN L ON L.COD = CB.COD
      WHERE L.FV BETWEEN @DESDE AND @HASTA AND (L.CAP > 0 OR L.INTE > 0)
-     GROUP BY CB.EMPRESA, CB.BANCO
-     ORDER BY CB.EMPRESA, CB.BANCO`, params);
+     GROUP BY CB.EMPRESA, CB.BANCO, CB.MONEDA
+     ORDER BY CB.EMPRESA, CB.BANCO, CB.MONEDA`, params);
 }
 /** CONSOLIDADO: deuda pendiente y lo pagado, por empresa y banco (o solo por banco). */
 export async function consolidado(bd, f, porBanco) {
     const e = await esquema(bd);
     const params = {};
-    const grupo = porBanco ? 'CB.BANCO' : 'CB.EMPRESA, CB.BANCO';
+    const grupo = porBanco ? 'CB.BANCO, CB.MONEDA' : 'CB.EMPRESA, CB.BANCO, CB.MONEDA';
     return queryTenantRaw(bd, `WITH ${cteLineas(e)}, ${cteCabecera(f, params, e)},
      A AS (
        SELECT L.COD,
@@ -221,7 +232,7 @@ export async function detalle(bd, codPagares, corte) {
     const params = { COD: p(() => sql.Int, codPagares) };
     fechaParam(params, 'CORTE', corte);
     const cab = await queryTenantRaw(bd, `WITH ${cteCabecera({}, params, e)}
-     SELECT CB.COD AS CODPAGARES, CB.PAGARE, CB.EMPRESA, CB.BANCO, ${fechaIso('CB.FECHA')} AS FECHA, CB.PLAZO, CB.FRECUENCIA,
+     SELECT CB.COD AS CODPAGARES, CB.PAGARE, CB.EMPRESA, CB.BANCO, CB.MONEDA, ${fechaIso('CB.FECHA')} AS FECHA, CB.PLAZO, CB.FRECUENCIA,
             ${e.frecuenciaIntereses ? 'C.FRECUENCIAPAGOINTERESES' : 'NULL'} AS FRECUENCIA_INTERESES, CB.TASA, CB.MONTO
      FROM CB JOIN RIP_PAGARESCAB C WITH (NOLOCK) ON C.CODPAGARES = CB.COD
      WHERE CB.COD = @COD`, params);

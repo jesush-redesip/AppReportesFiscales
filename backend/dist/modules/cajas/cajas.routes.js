@@ -1,13 +1,34 @@
 import { requirePermiso } from '../../shared/auth/permisos.js';
 import { asientoQuerySchema, cierreQuerySchema, contabilizarBodySchema, cotizacionQuerySchema, descontabilizarBodySchema, descontabilizarDepositoBodySchema, eliminarFormaPagoBodySchema, formasPagoDisponiblesQuerySchema, guardarFormaPagoBodySchema, guardarMontoBodySchema, traspasarBodySchema, } from './cajas.schema.js';
 import { getAsiento, getCierre, getCotizacion, getDepositos, getFormasPagoDisponibles, getTiendas, } from './cajas.repository.js';
-import { contabilizar, descontabilizarCierre, descontabilizarDeposito, eliminarFormaPago, guardarFormaPago, guardarMontoDeclarado, traspasarFacturas, } from './cajas-mutaciones.repository.js';
+import { contabilizar, resumenContabilizado, descontabilizarCierre, descontabilizarDeposito, eliminarFormaPago, guardarFormaPago, guardarMontoDeclarado, traspasarFacturas, } from './cajas-mutaciones.repository.js';
 export default async function cajasRoutes(fastify) {
     const soloVerCajas = { preHandler: requirePermiso('VISUALIZARCAJAS') };
     fastify.get('/api/cajas/tiendas', soloVerCajas, async (req) => getTiendas(req.user.bd));
     fastify.get('/api/cajas/cierre', { ...soloVerCajas, schema: { querystring: cierreQuerySchema } }, async (req) => getCierre(req.user.bd, req.query.serie, req.query.fecha));
     fastify.get('/api/cajas/depositos', { ...soloVerCajas, schema: { querystring: cierreQuerySchema } }, async (req) => getDepositos(req.user.bd, req.query.serie, req.query.fecha));
     fastify.get('/api/cajas/asiento', { ...soloVerCajas, schema: { querystring: asientoQuerySchema } }, async (req) => getAsiento(req.user.bd, req.query.tipo, req.query.serie, req.query.serieCaja, req.query.fecha, req.query.z));
+    /** Resumen de un cierre ya contabilizado (asientos, caja, cajero, Z, documentos). */
+    fastify.get('/api/cajas/resumen-contabilizado', {
+        ...soloVerCajas,
+        schema: {
+            querystring: {
+                type: 'object',
+                required: ['serie', 'serieCaja', 'fecha', 'z'],
+                properties: {
+                    serie: { type: 'string', minLength: 1, maxLength: 4 },
+                    serieCaja: { type: 'string', minLength: 1, maxLength: 10 },
+                    fecha: { type: 'string', pattern: '^[0-9]{8}$' },
+                    z: { type: 'string', pattern: '^[0-9]+$' },
+                },
+            },
+        },
+    }, async (req) => resumenContabilizado(req.user.bd, {
+        serie: req.query.serie,
+        serieCaja: req.query.serieCaja,
+        fecha: req.query.fecha,
+        z: Number(req.query.z),
+    }));
     fastify.get('/api/cajas/formas-pago-disponibles', { ...soloVerCajas, schema: { querystring: formasPagoDisponiblesQuerySchema } }, async (req) => getFormasPagoDisponibles(req.user.bd, req.query.caja, req.query.z));
     fastify.get('/api/cajas/cotizacion', { ...soloVerCajas, schema: { querystring: cotizacionQuerySchema } }, async (req) => getCotizacion(req.user.bd, req.query.fecha, req.query.importe));
     const soloContabilizar = { preHandler: requirePermiso('CONTABILIZAR') };

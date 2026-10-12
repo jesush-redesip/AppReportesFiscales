@@ -2,7 +2,7 @@ import sql from 'mssql';
 import { generalPool, generalPoolConnect } from '../../shared/db/general-pool.js';
 import { esModuloReporte, esModuloValido, MODULO_CAJAS, PERMISO_CONFIG_CAJAS, PERMISO_PAGARES_GESTION, PERMISO_SUPERVISOR_INTERNO, } from '../../shared/auth/modulos.js';
 import { CODUSUARIO_SUPERVISOR, getModulosPorUsuario, reemplazarModulosUsuario } from '../../shared/auth/permisos.js';
-import { modulosActivos } from '../../shared/auth/activacion.js';
+import { modulosActivosEnAlguna } from '../../shared/auth/activacion.js';
 export class ModuloInvalidoError extends Error {
     constructor(modulo) {
         super(`El módulo "${modulo}" no existe.`);
@@ -75,7 +75,7 @@ export async function updatePermisos(items, admin) {
     // Lo que no se ve en la pantalla se conserva tal cual estaba: los módulos desactivados
     // en la instalación, el Cierre de Caja si está desactivado, y la marca de supervisor
     // interno cuando quien guarda no es el SUPERVISOR.
-    const [actuales, activos] = await Promise.all([listUsuariosConPermisos({ ...admin, esSupervisor: true }), modulosActivos()]);
+    const [actuales, activos] = await Promise.all([listUsuariosConPermisos({ ...admin, esSupervisor: true }), modulosActivosEnAlguna()]);
     const porCodigo = new Map(actuales.map((u) => [u.codUsuario, u]));
     const cajasActivo = activos.has(MODULO_CAJAS);
     items = items.map((item) => {

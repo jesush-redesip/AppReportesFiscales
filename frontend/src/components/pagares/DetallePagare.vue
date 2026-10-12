@@ -16,6 +16,15 @@ type Fila = Record<string, unknown>;
 interface Detalle {
   pagare: Fila;
   lineas: Fila[];
+  asientos: Fila[];
+  /** La instalación genera los asientos (configuración contable). */
+  contabiliza: boolean;
+  /** % de IGTF de la configuración (para sugerir el monto). */
+  tasaIgtf: number;
+}
+interface Cargo {
+  descripcion: string;
+  monto: number | '';
 }
 const BASE = '/api/reportes/pagares';
 const datos = ref<Detalle | null>(null);
@@ -51,7 +60,21 @@ const totales = computed(() => {
 
 // --- Acción en curso (un solo panel a la vez) ---
 type Accion =
-  | { tipo: 'pagar'; fila: Fila; que: 'capital' | 'intereses'; fechaContable: string }
+  | {
+      tipo: 'pagar';
+      fila: Fila;
+      capital: boolean;
+      intereses: boolean;
+      fechaContable: string;
+      tasaCambio: number | '';
+      cargos: Cargo[];
+      /** Bs exactos del estado de cuenta; vacío = calculado. */
+      capitalBs: number | '';
+      interesesBs: number | '';
+      igtfBs: number | '';
+    }
+  | { tipo: 'moneda'; moneda: 'USD' | 'VES' }
+  | { tipo: 'reversar'; asiento: Fila; fechaContable: string }
   | { tipo: 'editar'; fila: Fila; fecha: string; capital: number; intereses: number; ajustarIntereses: boolean }
   | { tipo: 'tasa'; tasa: number }
   | { tipo: 'anular'; motivo: string };
@@ -60,8 +83,59 @@ const trabajando = ref(false);
 
 function pagar(fila: Fila, que: 'capital' | 'intereses') {
   mensaje.value = '';
-  accion.value = { tipo: 'pagar', fila, que, fechaContable: hoyIso() };
+  // Por defecto se paga lo que la cuota tenga pendiente (como hace el banco).
+  accion.value = {
+    tipo: 'pagar',
+    fila,
+    capital: que === 'capital' || pendiente(fila.ESTADO_CAPITAL),
+    intereses: que === 'intereses' || pendiente(fila.ESTADO_INTERESES),
+    fechaContable: hoyIso(),
+    tasaCambio: '',
+    cargos: [],
+    capitalBs: '',
+    interesesBs: '',
+    igtfBs: '',
+  };
+  if (!enBs.value) void sugerirTasa();
 }
+
+/** Cotización USD de la fecha contable, como sugerencia (se puede corregir por la del banco). */
+async function sugerirTasa() {
+  const a = accion.value;
+  if (!a || a.tipo !== 'pagar' || !datos.value?.contabiliza || !a.fechaContable) return;
+  try {
+    const c = await api.get<{ tasa: number | null }>(`${BASE}/cotizacion`, { fecha: a.fechaContable });
+    if (accion.value === a && c.tasa) a.tasaCambio = c.tasa;
+  } catch {
+    /* sin sugerencia: el usuario la escribe */
+  }
+}
+
+/** Moneda del pagaré: USD (indexado, lo normal) o VES (Bs, sin conversión). */
+const enBs = computed(() => datos.value?.pagare.MONEDA === 'VES');
+const simbolo = computed(() => (enBs.value ? 'Bs' : 'USD'));
+const r2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Montos en Bs del pago: los escritos o los calculados (monto × tasa y el % de IGTF). */
+const resumenPago = computed(() => {
+  const a = accion.value;
+  if (!a || a.tipo !== 'pagar' || !datos.value) return null;
+  const tasa = enBs.value ? 1 : Number(a.tasaCambio) || 0;
+  const capCalc = a.capital ? r2(Number(a.fila.CAPITAL) * tasa) : 0;
+  const intCalc = a.intereses ? r2(Number(a.fila.INTERESES) * tasa) : 0;
+  const cap = a.capital ? (a.capitalBs === '' ? capCalc : Number(a.capitalBs)) : 0;
+  const inte = a.intereses ? (a.interesesBs === '' ? intCalc : Number(a.interesesBs)) : 0;
+  const igtfCalc = r2(((cap + inte) * (datos.value.tasaIgtf || 0)) / 100);
+  const igtf = a.igtfBs === '' ? igtfCalc : Number(a.igtfBs);
+  const cargos = a.cargos.reduce((t, c) => t + (Number(c.monto) || 0), 0);
+  return { capCalc, intCalc, igtfCalc, total: r2(cap + inte + igtf + cargos) };
+});
+
+function reversar(asiento: Fila) {
+  mensaje.value = '';
+  accion.value = { tipo: 'reversar', asiento, fechaContable: hoyIso() };
+}
+const TIPOS_ASIENTO: Record<string, string> = { DESEMBOLSO: 'Desembolso', PAGO: 'Pago', REVERSO: 'Reverso' };
 function editar(fila: Fila) {
   mensaje.value = '';
   accion.value = {
@@ -81,14 +155,32 @@ async function ejecutar() {
   error.value = '';
   try {
     if (a.tipo === 'pagar') {
-      await api.post(`${BASE}/cuotas/pagar`, {
+      const r = await api.post<{ asientoVisible: number | null }>(`${BASE}/cuotas/pagar`, {
         cod: props.cod,
         mes: Number(a.fila.MES),
         fecha: String(a.fila.FECHA).slice(0, 10),
-        tipo: a.que,
+        capital: a.capital,
+        intereses: a.intereses,
         fechaContable: a.fechaContable,
+        ...(datos.value?.contabiliza && !enBs.value && a.tasaCambio !== '' ? { tasaCambio: Number(a.tasaCambio) } : {}),
+        ...(datos.value?.contabiliza && (a.capitalBs !== '' || a.interesesBs !== '' || a.igtfBs !== '')
+          ? {
+              montosBs: {
+                ...(a.capital && a.capitalBs !== '' ? { capital: Number(a.capitalBs) } : {}),
+                ...(a.intereses && a.interesesBs !== '' ? { intereses: Number(a.interesesBs) } : {}),
+                ...(a.igtfBs !== '' ? { igtf: Number(a.igtfBs) } : {}),
+              },
+            }
+          : {}),
+        ...(datos.value?.contabiliza ? { cargos: a.cargos.filter((c) => c.descripcion.trim() && Number(c.monto) > 0).map((c) => ({ descripcion: c.descripcion.trim(), monto: Number(c.monto) })) } : {}),
       });
-      mensaje.value = `Cuota ${a.fila.MES}: ${a.que} marcado como pagado.`;
+      mensaje.value = `Cuota ${a.fila.MES} pagada.` + (r.asientoVisible ? ` Asiento ${r.asientoVisible}.` : '');
+    } else if (a.tipo === 'moneda') {
+      await api.post(`${BASE}/moneda`, { cod: props.cod, moneda: a.moneda });
+      mensaje.value = `Moneda del pagaré: ${a.moneda === 'VES' ? 'Bs' : 'USD'}. Aplica a los asientos que se generen desde ahora.`;
+    } else if (a.tipo === 'reversar') {
+      const r = await api.post<{ asientoVisible: number }>(`${BASE}/reversar`, { id: Number(a.asiento.ID), fechaContable: a.fechaContable });
+      mensaje.value = `Asiento ${a.asiento.ASIENTOVISIBLE} reversado con el asiento ${r.asientoVisible}.`;
     } else if (a.tipo === 'editar') {
       const f = a.fila;
       const cuerpo: Record<string, unknown> = { cod: props.cod, mes: Number(f.MES), fecha: String(f.FECHA).slice(0, 10) };
@@ -139,7 +231,7 @@ async function excel() {
     <dl class="resumen">
       <div><dt>Empresa</dt><dd>{{ datos.pagare.EMPRESA }}</dd></div>
       <div><dt>Liquidación</dt><dd>{{ fecha(datos.pagare.FECHA) }}</dd></div>
-      <div><dt>Monto</dt><dd>{{ numero(datos.pagare.MONTO) }}</dd></div>
+      <div><dt>Monto</dt><dd>{{ numero(datos.pagare.MONTO) }} {{ simbolo }}</dd></div>
       <div><dt>Tasa anual</dt><dd>{{ numero(datos.pagare.TASA) }} %</dd></div>
       <div><dt>Plazo</dt><dd>{{ datos.pagare.PLAZO }} meses</dd></div>
       <div><dt>Capital</dt><dd>{{ datos.pagare.FRECUENCIA || '—' }}</dd></div>
@@ -149,18 +241,75 @@ async function excel() {
       <button type="button" class="secundario" :disabled="descargando" @click="excel"><AppIcon name="download" :size="15" /> Excel</button>
       <template v-if="puedeGestionar">
         <button type="button" class="secundario" @click="accion = { tipo: 'tasa', tasa: Number(datos.pagare.TASA) }">Cambiar tasa</button>
+        <button type="button" class="secundario" @click="accion = { tipo: 'moneda', moneda: enBs ? 'VES' : 'USD' }">Moneda: {{ simbolo }}</button>
         <button type="button" class="secundario peligro" @click="accion = { tipo: 'anular', motivo: '' }">Anular pagaré</button>
       </template>
     </div>
 
     <form v-if="accion" class="panel" @submit.prevent="ejecutar">
       <template v-if="accion.tipo === 'pagar'">
-        <span>
-          Marcar como pagado el <strong>{{ accion.que }}</strong> de la cuota {{ accion.fila.MES }} ({{ fecha(accion.fila.FECHA) }}):
-          {{ numero(accion.que === 'capital' ? accion.fila.CAPITAL : accion.fila.INTERESES) }}
+        <span>Pagar la cuota {{ accion.fila.MES }} ({{ fecha(accion.fila.FECHA) }})</span>
+        <label class="check">
+          <input v-model="accion.capital" type="checkbox" :disabled="!pendiente(accion.fila.ESTADO_CAPITAL)" />
+          Capital {{ numero(accion.fila.CAPITAL) }} {{ simbolo }}
+        </label>
+        <label class="check">
+          <input v-model="accion.intereses" type="checkbox" :disabled="!pendiente(accion.fila.ESTADO_INTERESES)" />
+          Intereses {{ numero(accion.fila.INTERESES) }} {{ simbolo }}
+        </label>
+        <label class="campo">Fecha contable <input v-model="accion.fechaContable" type="date" required @change="sugerirTasa" /></label>
+        <template v-if="datos.contabiliza">
+          <label v-if="!enBs" class="campo">Tasa Bs/USD <input v-model.number="accion.tasaCambio" type="number" min="0.0001" step="0.0001" required /></label>
+          <div v-if="resumenPago" class="montos-bs">
+            <label v-if="accion.capital" class="campo">
+              Capital (Bs)
+              <input v-model.number="accion.capitalBs" type="number" min="0" step="0.01" :placeholder="numero(resumenPago.capCalc)" />
+            </label>
+            <label v-if="accion.intereses" class="campo">
+              Intereses (Bs)
+              <input v-model.number="accion.interesesBs" type="number" min="0" step="0.01" :placeholder="numero(resumenPago.intCalc)" />
+            </label>
+            <label class="campo">
+              IGTF (Bs)
+              <input v-model.number="accion.igtfBs" type="number" min="0" step="0.01" :placeholder="numero(resumenPago.igtfCalc)" />
+            </label>
+            <span class="nota">
+              Total debitado por el banco: <strong>{{ numero(resumenPago.total) }} Bs</strong>. Deje vacío un monto para usar el
+              calculado, o escriba el del estado de cuenta.
+            </span>
+          </div>
+          <div class="cargos">
+            <div v-for="(c, i) in accion.cargos" :key="i" class="cargo">
+              <input v-model="c.descripcion" type="text" maxlength="80" placeholder="Concepto (comisión flat, 1x1000…)" />
+              <input v-model.number="c.monto" type="number" min="0.01" step="0.01" placeholder="Bs" />
+              <button type="button" class="enlace" @click="accion.cargos.splice(i, 1)">quitar</button>
+            </div>
+            <button type="button" class="enlace" @click="accion.cargos.push({ descripcion: '', monto: '' })">+ otro cargo del banco</button>
+          </div>
+          <span class="nota">Genera el asiento en la contabilidad del año de la fecha contable.</span>
+        </template>
+        <span v-else class="nota">No genera asiento (la contabilización está apagada en la configuración): cárguelo en ICG.</span>
+      </template>
+      <template v-else-if="accion.tipo === 'moneda'">
+        <label class="campo">
+          Moneda del pagaré
+          <select v-model="accion.moneda">
+            <option value="USD">USD (indexado)</option>
+            <option value="VES">Bs</option>
+          </select>
+        </label>
+        <span class="nota">
+          En USD, los asientos convierten a Bs con la tasa del día; en Bs, van por el monto tal cual. No cambia los asientos ya
+          generados.
         </span>
-        <label class="campo">Fecha contable <input v-model="accion.fechaContable" type="date" required /></label>
-        <span class="nota">No genera asiento: contabilícelo en el PHP o en ICG.</span>
+      </template>
+      <template v-else-if="accion.tipo === 'reversar'">
+        <span>
+          Reversar el asiento <strong>{{ accion.asiento.ASIENTOVISIBLE }}</strong> ({{ TIPOS_ASIENTO[String(accion.asiento.TIPO)] }}
+          {{ accion.asiento.MES ? `cuota ${accion.asiento.MES}` : '' }}, {{ numero(accion.asiento.MONTOBS) }} Bs)
+        </span>
+        <label class="campo">Fecha del reverso <input v-model="accion.fechaContable" type="date" required /></label>
+        <span class="nota">Crea un asiento con Debe y Haber invertidos; si era un pago, la cuota vuelve a quedar pendiente.</span>
       </template>
       <template v-else-if="accion.tipo === 'editar'">
         <span>Cuota {{ accion.fila.MES }}</span>
@@ -187,12 +336,12 @@ async function excel() {
       </template>
       <template v-else>
         <label class="campo ancho">Motivo <input v-model="accion.motivo" type="text" maxlength="200" placeholder="Registrado por error…" /></label>
-        <span class="nota">Solo si no tiene pagos. No borra nada: deja de verse en el Aplicativo (en el PHP sigue apareciendo).</span>
+        <span class="nota">Solo si no tiene pagos. No borra nada: deja de verse en los reportes y, si se contabilizó el desembolso, se reversa.</span>
       </template>
       <div class="acciones">
         <button type="button" class="secundario" @click="accion = null">Cancelar</button>
         <button type="submit" :class="{ peligro: accion.tipo === 'anular' }" :disabled="trabajando">
-          {{ trabajando ? 'Guardando…' : accion.tipo === 'anular' ? 'Anular' : 'Confirmar' }}
+          {{ trabajando ? 'Guardando…' : accion.tipo === 'anular' ? 'Anular' : accion.tipo === 'reversar' ? 'Reversar' : 'Confirmar' }}
         </button>
       </div>
     </form>
@@ -205,10 +354,10 @@ async function excel() {
           <tr>
             <th>Cuota</th>
             <th>Vencimiento</th>
-            <th>Saldo</th>
-            <th>Capital</th>
-            <th>Intereses</th>
-            <th>Total</th>
+            <th>Saldo ({{ simbolo }})</th>
+            <th>Capital ({{ simbolo }})</th>
+            <th>Intereses ({{ simbolo }})</th>
+            <th>Total ({{ simbolo }})</th>
             <th>Capital</th>
             <th>Intereses</th>
             <th v-if="puedeGestionar"></th>
@@ -260,6 +409,41 @@ async function excel() {
         </tfoot>
       </table>
     </div>
+
+    <template v-if="datos.asientos?.length">
+      <h3 class="subtitulo">Asientos generados por el Aplicativo</h3>
+      <div class="tabla">
+        <table>
+          <thead>
+            <tr>
+              <th>Asiento</th>
+              <th>Tipo</th>
+              <th>Cuota</th>
+              <th>Fecha contable</th>
+              <th>Contabilidad</th>
+              <th>Tasa</th>
+              <th>Monto Bs</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="a in datos.asientos" :key="String(a.ID)">
+              <td>{{ a.ASIENTOVISIBLE }}</td>
+              <td>{{ TIPOS_ASIENTO[String(a.TIPO)] ?? a.TIPO }}</td>
+              <td>{{ a.MES ?? '' }}</td>
+              <td>{{ fecha(a.FECHACONTABLE) }}</td>
+              <td>{{ a.BDCONTABLE }}</td>
+              <td class="num">{{ numero(a.TASA) }}</td>
+              <td class="num">{{ numero(a.MONTOBS) }}</td>
+              <td>
+                <span v-if="a.REVERSADOPOR" class="estado-cuota pagado">Reversado</span>
+                <button v-else-if="puedeGestionar && a.TIPO === 'PAGO'" type="button" class="enlace" @click="reversar(a)">Reversar</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </template>
   </template>
   <p v-else-if="error" class="error">{{ error }}</p>
 </template>
@@ -332,6 +516,37 @@ async function excel() {
   display: flex;
   gap: var(--space-2);
   margin-left: auto;
+}
+.subtitulo {
+  font-size: 0.9rem;
+  margin: var(--space-4) 0 var(--space-2);
+}
+.montos-bs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  flex-basis: 100%;
+}
+.montos-bs input {
+  width: 10rem;
+}
+.cargos {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex-basis: 100%;
+}
+.cargo {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+.cargo input[type='text'] {
+  min-width: 18rem;
+}
+.cargo input[type='number'] {
+  width: 9rem;
 }
 .tabla {
   max-height: 55vh;

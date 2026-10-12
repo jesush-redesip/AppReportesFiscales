@@ -7,6 +7,7 @@ import {
 } from './configuracion-cuentas.schema.js';
 import {
   BaseContableInvalidaError,
+  CuentaInexistenteError,
   getConfiguracionCuentas,
   listarBasesContables,
   listarCuentasContables,
@@ -35,7 +36,7 @@ export default async function configuracionCuentasRoutes(fastify: FastifyInstanc
         await updateConfiguracionCuentas(req.user!.bd, req.body);
         return { ok: true };
       } catch (err) {
-        if (err instanceof BaseContableInvalidaError) {
+        if (err instanceof BaseContableInvalidaError || err instanceof CuentaInexistenteError) {
           return reply.status(400).send({ error: 'BadRequest', message: err.message });
         }
         throw err;
@@ -46,12 +47,14 @@ export default async function configuracionCuentasRoutes(fastify: FastifyInstanc
   /** Bases contables disponibles para elegir de dónde traer el plan de cuentas. */
   fastify.get('/api/config/bases-contables', conAccesoConfig, async () => listarBasesContables());
 
-  fastify.get<{ Querystring: { bdContable: string } }>(
+  /** Búsqueda en el plan de cuentas de la base elegida (por código o nombre, o por códigos). */
+  fastify.get<{ Querystring: { bdContable: string; q?: string; codigos?: string } }>(
     '/api/config/cuentas-disponibles',
     { ...conAccesoConfig, schema: { querystring: cuentasDisponiblesQuerySchema } },
     async (req, reply) => {
       try {
-        return await listarCuentasContables(req.query.bdContable);
+        const codigos = req.query.codigos ? req.query.codigos.split(',').filter(Boolean) : [];
+        return await listarCuentasContables(req.query.bdContable, req.query.q ?? '', codigos);
       } catch (err) {
         if (err instanceof BaseContableInvalidaError) {
           return reply.status(400).send({ error: 'BadRequest', message: err.message });

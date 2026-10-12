@@ -1,9 +1,12 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { empresasDeSesion, type SessionTokenPayload } from '../auth/auth.service.js';
 import { PagaresError, catalogos, detalle } from './pagares.repository.js';
-import { COLUMNAS_DETALLE, VISTAS, consultar, excel, excelDetalle, type Consulta, type Vista } from './pagares.service.js';
+import { COLUMNAS_DETALLE, VISTAS, conMoneda, consultar, excel, excelDetalle, type Consulta, type Vista } from './pagares.service.js';
+import { MONEDAS, type Moneda } from './pagares.repository.js';
 import * as gestion from './pagares.gestion.js';
-import { getModulosUsuario } from '../../shared/auth/permisos.js';
+import { getModulosUsuario, requireAdminPermisos } from '../../shared/auth/permisos.js';
+import { bdContableReferencia, buscarCuentas, guardarConfig, leerConfig, ultimaCuentaDeRaiz, type ConfigContable } from './pagares.contabilidad.js';
+import { asientosDePagare, cotizacionUsd } from './pagares.asientos.js';
 import { PERMISO_PAGARES_GESTION } from '../../shared/auth/modulos.js';
 
 /**
@@ -18,6 +21,7 @@ interface QueryVista {
   series?: string;
   banco?: string;
   buscar?: string;
+  moneda?: Moneda;
 }
 
 const FECHA = { type: 'string', pattern: '^[0-9]{8}$' } as const;
@@ -32,6 +36,7 @@ const esquemaVista = {
       series: { type: 'string', pattern: '^[A-Za-z0-9,]*$', maxLength: 300 },
       banco: { type: 'string', maxLength: 200 },
       buscar: { type: 'string', maxLength: 40 },
+      moneda: { type: 'string', enum: MONEDAS },
     },
   },
 };
@@ -51,6 +56,7 @@ function aConsulta(q: QueryVista): Consulta {
     series: q.series ? q.series.split(',').filter(Boolean) : undefined,
     banco: q.banco || undefined,
     buscar: q.buscar || undefined,
+    moneda: q.moneda || undefined,
   };
 }
 
@@ -96,13 +102,26 @@ const cuerpo = (properties: Record<string, unknown>, required: string[]) => ({
   body: { type: 'object', additionalProperties: false, required, properties },
 });
 const REF_CUOTA = { cod: ENT, mes: ENT, fecha: FECHA_ISO };
+const CARGOS = {
+  type: 'array',
+  maxItems: 20,
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['descripcion', 'monto'],
+    properties: { descripcion: { type: 'string', minLength: 1, maxLength: 80 }, monto: NUM },
+  },
+} as const;
+const TASA = { type: 'number', exclusiveMinimum: 0 } as const;
+const BS = { type: 'number', minimum: 0 } as const;
+const MONEDA = { type: 'string', enum: MONEDAS } as const;
 
 const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 export default async function pagaresRoutes(fastify: FastifyInstance) {
   const base = '/api/reportes/pagares';
   const g = { preHandler: requireGestion };
-  const sesion = (req: FastifyRequest) => ({ codUsuario: req.user!.codUsuario, codEmpresa: req.user!.codEmpresa });
+  const sesion = (req: FastifyRequest) => ({ codUsuario: req.user!.codUsuario, codEmpresa: req.user!.codEmpresa, usuario: req.user!.usuario });
 
   // --- Gestión ---
   fastify.get(`${base}/registro/series`, g, async (req, reply) => manejar(reply, () => gestion.seriesContables(req.user!.bd)));
@@ -126,7 +145,7 @@ export default async function pagaresRoutes(fastify: FastifyInstance) {
       }),
   );
 
-  fastify.post<{ Body: gestion.NuevoPagare }>(
+  fastify.post<{ Body: gestion.NuevoPagare & gestion.DatosAsiento }>(
     `${base}/registro`,
     {
       ...g,
@@ -139,22 +158,49 @@ export default async function pagaresRoutes(fastify: FastifyInstance) {
           comision: NUM,
           cuentaComision: { type: 'string', maxLength: 15 },
           mesesInteresAdelantado: ENT,
+          tasaCambio: TASA,
+          cargos: CARGOS,
+          moneda: MONEDA,
+          montoBs: BS,
+          comisionBs: BS,
         },
         [...REQ_AMORTIZACION, 'pagare', 'serie', 'cuentaBanco', 'comision', 'mesesInteresAdelantado'],
       ),
     },
-    async (req, reply) => manejar(reply, () => gestion.registrar(req.user!.bd, req.body, sesion(req))),
+    async (req, reply) =>
+      manejar(reply, () => {
+        const { tasaCambio, cargos, montoBs, comisionBs, ...nuevo } = req.body;
+        return gestion.registrar(req.user!.bd, nuevo, sesion(req), { tasaCambio, cargos, montoBs, comisionBs });
+      }),
   );
 
-  fastify.post<{ Body: gestion.RefCuota & { cod: number; tipo: 'capital' | 'intereses'; fechaContable: string } }>(
+  fastify.post<{ Body: gestion.RefCuota & gestion.Pago & { cod: number } }>(
     `${base}/cuotas/pagar`,
-    { ...g, schema: cuerpo({ ...REF_CUOTA, tipo: { type: 'string', enum: ['capital', 'intereses'] }, fechaContable: FECHA_ISO }, ['cod', 'mes', 'fecha', 'tipo', 'fechaContable']) },
+    {
+      ...g,
+      schema: cuerpo(
+        { ...REF_CUOTA, capital: { type: 'boolean' }, intereses: { type: 'boolean' }, fechaContable: FECHA_ISO, tasaCambio: TASA, cargos: CARGOS,
+          montosBs: { type: 'object', additionalProperties: false, properties: { capital: BS, intereses: BS, igtf: BS } } },
+        ['cod', 'mes', 'fecha', 'capital', 'intereses', 'fechaContable'],
+      ),
+    },
     async (req, reply) =>
-      manejar(reply, async () => {
-        const b = req.body;
-        await gestion.pagar(req.user!.bd, b.cod, { mes: b.mes, fecha: b.fecha }, b.tipo, b.fechaContable, sesion(req));
-        return { ok: true };
+      manejar(reply, () => {
+        const { cod, mes, fecha, ...pago } = req.body;
+        return gestion.pagar(req.user!.bd, cod, { mes, fecha }, pago, sesion(req));
       }),
+  );
+
+  fastify.post<{ Body: { id: number; fechaContable: string } }>(
+    `${base}/reversar`,
+    { ...g, schema: cuerpo({ id: ENT, fechaContable: FECHA_ISO }, ['id', 'fechaContable']) },
+    async (req, reply) => manejar(reply, () => gestion.reversar(req.user!.bd, req.body.id, req.body.fechaContable, sesion(req))),
+  );
+
+  fastify.get<{ Querystring: { fecha: string } }>(
+    `${base}/cotizacion`,
+    { ...g, schema: { querystring: { type: 'object', required: ['fecha'], properties: { fecha: FECHA_ISO } } } },
+    async (req) => (await cotizacionUsd(req.user!.bd, req.query.fecha)) ?? { codMoneda: null, tasa: null, fecha: null },
   );
 
   fastify.post<{ Body: gestion.RefCuota & gestion.EdicionCuota & { cod: number; nuevaFecha?: string } }>(
@@ -196,6 +242,71 @@ export default async function pagaresRoutes(fastify: FastifyInstance) {
       }),
   );
 
+  fastify.post<{ Body: { cod: number; moneda: Moneda } }>(
+    `${base}/moneda`,
+    { ...g, schema: cuerpo({ cod: ENT, moneda: MONEDA }, ['cod', 'moneda']) },
+    async (req, reply) =>
+      manejar(reply, async () => {
+        await gestion.cambiarMoneda(req.user!.bd, req.body.cod, req.body.moneda);
+        return { ok: true };
+      }),
+  );
+
+  // --- Configuración contable (Fase 3) ---
+  fastify.get(`${base}/config`, g, async (req, reply) => manejar(reply, () => leerConfig(req.user!.bd)));
+
+  fastify.put<{ Body: ConfigContable }>(
+    `${base}/config`,
+    {
+      preHandler: [requireGestion, requireAdminPermisos],
+      schema: cuerpo(
+        {
+          contabilizar: { type: 'boolean' },
+          cuentaIntereses: { type: 'string', maxLength: 12 },
+          cuentaIgtf: { type: 'string', maxLength: 12 },
+          tasaIgtf: NUM,
+          cuentaComision: { type: 'string', maxLength: 12 },
+          raizPagare: { type: 'string', maxLength: 9 },
+        },
+        ['contabilizar', 'cuentaIntereses', 'cuentaIgtf', 'tasaIgtf', 'cuentaComision', 'raizPagare'],
+      ),
+    },
+    async (req, reply) =>
+      manejar(reply, async () => {
+        await guardarConfig(req.user!.bd, req.body);
+        return leerConfig(req.user!.bd);
+      }),
+  );
+
+  /** Plan de cuentas (de la contabilidad del año en curso) para elegir las cuentas. */
+  fastify.get<{ Querystring: { q?: string; codigos?: string; raiz?: string } }>(
+    `${base}/config/cuentas`,
+    {
+      ...g,
+      schema: {
+        querystring: {
+          type: 'object',
+          properties: {
+            q: { type: 'string', maxLength: 60 },
+            codigos: { type: 'string', pattern: '^[0-9,]*$', maxLength: 300 },
+            raiz: { type: 'string', pattern: '^[0-9]*$', maxLength: 9 },
+          },
+        },
+      },
+    },
+    async (req, reply) =>
+      manejar(reply, async () => {
+        const bdContable = await bdContableReferencia(req.user!.bd);
+        if (!bdContable) return { bdContable: null, cuentas: [], ultimaDeRaiz: null };
+        const codigos = req.query.codigos ? req.query.codigos.split(',').filter(Boolean) : [];
+        return {
+          bdContable,
+          cuentas: await buscarCuentas(bdContable, req.query.q ?? '', codigos),
+          ultimaDeRaiz: req.query.raiz ? await ultimaCuentaDeRaiz(bdContable, req.query.raiz) : null,
+        };
+      }),
+  );
+
   // --- Consulta ---
 
   fastify.get(`${base}/catalogos`, async (req, reply) => manejar(reply, () => catalogos(req.user!.bd)));
@@ -205,7 +316,15 @@ export default async function pagaresRoutes(fastify: FastifyInstance) {
   );
 
   fastify.get<{ Querystring: { cod: number; corte: string } }>(`${base}/detalle`, { schema: esquemaDetalle }, async (req, reply) =>
-    manejar(reply, async () => ({ ...(await detalle(req.user!.bd, req.query.cod, req.query.corte)), columnas: COLUMNAS_DETALLE })),
+    manejar(reply, async () => {
+      const d = await detalle(req.user!.bd, req.query.cod, req.query.corte);
+      return {
+        ...d,
+        columnas: conMoneda(COLUMNAS_DETALLE, (d.pagare.MONEDA as Moneda) ?? 'USD'),
+        asientos: await asientosDePagare(req.user!.bd, req.query.cod),
+        ...(await leerConfig(req.user!.bd).then((c) => ({ contabiliza: c.contabilizar, tasaIgtf: c.tasaIgtf }))),
+      };
+    }),
   );
 
   fastify.get<{ Querystring: QueryVista }>(`${base}/excel`, { schema: esquemaVista }, async (req, reply) =>

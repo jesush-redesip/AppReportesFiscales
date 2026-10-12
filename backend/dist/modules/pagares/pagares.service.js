@@ -57,6 +57,18 @@ const COLUMNAS = {
     'consolidado-banco': [],
 };
 COLUMNAS['consolidado-banco'] = COLUMNAS.consolidado.filter((x) => x.id !== 'EMPRESA');
+// Columna Moneda después del banco (los listados pueden mezclar pagarés en USD y en Bs).
+for (const v of Object.keys(COLUMNAS)) {
+    const i = COLUMNAS[v].findIndex((x) => x.id === 'BANCO');
+    COLUMNAS[v].splice(i + 1, 0, c('MONEDA', 'Moneda', 'texto'));
+}
+export const NOMBRE_MONEDA = { USD: 'USD', VES: 'Bs' };
+/** Indica la moneda en el título de cada monto (si se filtró por una sola moneda). */
+export function conMoneda(cols, moneda) {
+    if (!moneda)
+        return cols;
+    return cols.map((x) => (x.tipo === 'monto' ? { ...x, titulo: `${x.titulo} (${NOMBRE_MONEDA[moneda]})` } : x));
+}
 export const COLUMNAS_DETALLE = [
     c('MES', 'Cuota', 'entero', true),
     c('FECHA', 'Vencimiento', 'fecha'),
@@ -84,7 +96,7 @@ export async function consultar(bd, vista, q) {
             : vista === 'pagos'
                 ? await repo.pagosPeriodo(bd, q, q.desde, q.hasta)
                 : await repo.consolidado(bd, q, vista === 'consolidado-banco');
-    return { columnas: COLUMNAS[vista], filas };
+    return { columnas: conMoneda(COLUMNAS[vista], q.moneda), filas };
 }
 // --- Excel ---
 const ddmmyyyy = (yyyyMMdd) => `${yyyyMMdd.slice(6, 8)}/${yyyyMMdd.slice(4, 6)}/${yyyyMMdd.slice(0, 4)}`;
@@ -167,8 +179,8 @@ export async function excelDetalle(bd, codPagares, corte, nombreEmpresa) {
     sheet.getCell('A1').font = { bold: true, size: 13 };
     sheet.getCell('A2').value = `PAGARÉ #${pagare.PAGARE} · ${pagare.BANCO} · ${pagare.EMPRESA}`;
     sheet.getCell('A2').font = { bold: true };
-    sheet.getCell('A3').value = `Monto ${Number(pagare.MONTO).toLocaleString('es-VE', { minimumFractionDigits: 2 })} · Tasa ${Number(pagare.TASA)} % · Plazo ${pagare.PLAZO} meses · Liquidación ${String(pagare.FECHA ?? '').split('-').reverse().join('/')}`;
-    escribirTabla(sheet, 5, COLUMNAS_DETALLE, lineas, true);
+    sheet.getCell('A3').value = `Monto ${NOMBRE_MONEDA[pagare.MONEDA] ?? ''} ${Number(pagare.MONTO).toLocaleString('es-VE', { minimumFractionDigits: 2 })} · Tasa ${Number(pagare.TASA)} % · Plazo ${pagare.PLAZO} meses · Liquidación ${String(pagare.FECHA ?? '').split('-').reverse().join('/')}`;
+    escribirTabla(sheet, 5, conMoneda(COLUMNAS_DETALLE, pagare.MONEDA), lineas, true);
     return Buffer.from(await wb.xlsx.writeBuffer());
 }
 //# sourceMappingURL=pagares.service.js.map

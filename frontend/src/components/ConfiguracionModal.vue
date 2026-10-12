@@ -172,16 +172,29 @@ watch(
 );
 
 // --- Módulos de la instalación (solo SUPERVISOR) ---
+// Lo general vale para todas las empresas; cada empresa puede tener excepciones (un
+// módulo activo o desactivado distinto de lo general). Sin excepción, hereda lo general.
 interface EstadoModulo {
   id: string;
   nombre: string;
   grupo: string;
   exclusivo: boolean;
   activo: boolean;
+  activoGeneral: boolean;
+  /** Excepción de la empresa elegida (null = hereda lo general). */
+  excepcion: boolean | null;
+}
+interface EmpresaModulos {
+  codEmpresa: number;
+  titulo: string;
+  excepciones: number;
 }
 const estadoModulos = ref<EstadoModulo[]>([]);
-/** Cambios sin guardar: id -> activo. */
-const pendientes = ref<Record<string, boolean>>({});
+const empresasModulos = ref<EmpresaModulos[]>([]);
+/** '' = Todas las empresas (lo general); si no, el código de la empresa. */
+const empresaModulos = ref<number | ''>('');
+/** Cambios sin guardar: id -> activo (general) o excepción (empresa; null = heredar). */
+const pendientes = ref<Record<string, boolean | null>>({});
 const modulosCargando = ref(false);
 const modulosGuardando = ref(false);
 const modulosError = ref('');
@@ -192,13 +205,30 @@ const modulosInstalacionPorGrupo = computed(() => {
   for (const m of estadoModulos.value) grupos.set(m.grupo, [...(grupos.get(m.grupo) ?? []), m]);
   return [...grupos.entries()].map(([grupo, modulos]) => ({ grupo, modulos }));
 });
-const activoEnPantalla = (m: EstadoModulo) => pendientes.value[m.id] ?? m.activo;
+const activoEnPantalla = (m: EstadoModulo) => (m.id in pendientes.value ? Boolean(pendientes.value[m.id]) : m.activoGeneral);
+/** Excepción de la empresa tal como está en pantalla: 'heredar' | 'si' | 'no'. */
+function excepcionEnPantalla(m: EstadoModulo): 'heredar' | 'si' | 'no' {
+  const v = m.id in pendientes.value ? pendientes.value[m.id] : m.excepcion;
+  return v === null ? 'heredar' : v ? 'si' : 'no';
+}
+function cambiarExcepcion(m: EstadoModulo, valor: string) {
+  const nuevo = valor === 'heredar' ? null : valor === 'si';
+  const copia = { ...pendientes.value };
+  if (nuevo === m.excepcion) delete copia[m.id];
+  else copia[m.id] = nuevo;
+  pendientes.value = copia;
+}
+/** Lo que queda para la empresa con lo que está en pantalla. */
+const efectivoEnEmpresa = (m: EstadoModulo) => {
+  const e = excepcionEnPantalla(m);
+  return e === 'heredar' ? m.activoGeneral : e === 'si';
+};
 const cantidadPendientes = computed(() => Object.keys(pendientes.value).length);
 
 function alternarActivo(m: EstadoModulo) {
   const nuevo = !activoEnPantalla(m);
   const copia = { ...pendientes.value };
-  if (nuevo === m.activo) delete copia[m.id];
+  if (nuevo === m.activoGeneral) delete copia[m.id];
   else copia[m.id] = nuevo;
   pendientes.value = copia;
 }
@@ -207,7 +237,12 @@ async function cargarModulosInstalacion() {
   modulosCargando.value = true;
   modulosError.value = '';
   try {
-    estadoModulos.value = await api.get<EstadoModulo[]>('/api/config/modulos-activos');
+    const [estado, empresas] = await Promise.all([
+      api.get<EstadoModulo[]>('/api/config/modulos-activos', empresaModulos.value === '' ? {} : { codEmpresa: empresaModulos.value }),
+      api.get<EmpresaModulos[]>('/api/config/modulos-empresas'),
+    ]);
+    estadoModulos.value = estado;
+    empresasModulos.value = empresas;
     pendientes.value = {};
   } catch (err) {
     modulosError.value = err instanceof Error ? err.message : 'Error al cargar los módulos.';
@@ -222,7 +257,10 @@ async function guardarModulosInstalacion() {
   modulosGuardado.value = '';
   try {
     const items = Object.entries(pendientes.value).map(([id, activo]) => ({ id, activo }));
-    const r = await api.put<{ ok: boolean; cambios: unknown[] }>('/api/config/modulos-activos', { items });
+    const r = await api.put<{ ok: boolean; cambios: unknown[] }>('/api/config/modulos-activos', {
+      items,
+      ...(empresaModulos.value === '' ? {} : { codEmpresa: empresaModulos.value }),
+    });
     modulosGuardado.value = `Guardado (${r.cambios.length} cambio${r.cambios.length === 1 ? '' : 's'}).`;
     await Promise.all([cargarModulosInstalacion(), cargarPermisos(), auth.refrescarAcceso()]);
   } catch (err) {
@@ -235,6 +273,11 @@ async function guardarModulosInstalacion() {
 watch(pestana, (p) => {
   modulosGuardado.value = '';
   if (p === 'modulos' && auth.esSupervisor) cargarModulosInstalacion();
+});
+// Al cambiar de empresa se descartan los cambios sin guardar y se lee la otra.
+watch(empresaModulos, () => {
+  modulosGuardado.value = '';
+  if (auth.esSupervisor) cargarModulosInstalacion();
 });
 </script>
 
@@ -365,20 +408,49 @@ watch(pestana, (p) => {
 
     <section v-if="auth.esSupervisor && pestana === 'modulos'">
       <p class="nota">
-        Qué módulos tiene este grupo económico. Un módulo desactivado desaparece del menú de todos y no se puede asignar;
-        al reactivarlo, cada usuario recupera lo que tenía.
+        Qué módulos tiene este grupo económico. Un módulo desactivado desaparece del menú y no se puede usar; al reactivarlo,
+        cada usuario recupera lo que tenía.
+      </p>
+      <label class="campo-empresa">
+        Aplicar a
+        <select v-model="empresaModulos" :disabled="modulosGuardando">
+          <option value="">Todas las empresas (configuración general)</option>
+          <option v-for="e in empresasModulos" :key="e.codEmpresa" :value="e.codEmpresa">
+            {{ e.titulo }}{{ e.excepciones ? ` · ${e.excepciones} excepción${e.excepciones === 1 ? '' : 'es'}` : '' }}
+          </option>
+        </select>
+      </label>
+      <p v-if="empresaModulos !== ''" class="nota">
+        Solo para esta empresa. "Como lo general" sigue lo que esté configurado para todas; elija activo o desactivado para
+        que esta empresa sea distinta.
       </p>
       <p v-if="modulosCargando" class="estado">Cargando...</p>
       <template v-else>
         <div class="modulos-instalacion">
           <div v-for="g in modulosInstalacionPorGrupo" :key="g.grupo" class="bloque">
             <div class="bloque-titulo">{{ g.grupo }}</div>
-            <label v-for="m in g.modulos" :key="m.id" class="check" :class="{ cambiado: m.id in pendientes }">
-              <input type="checkbox" :checked="activoEnPantalla(m)" @change="alternarActivo(m)" />
-              {{ m.nombre }}
-              <span v-if="m.exclusivo" class="badge interno" title="Módulo exclusivo: llega desactivado">Exclusivo</span>
-              <span v-if="!activoEnPantalla(m)" class="inactivo">desactivado</span>
-            </label>
+            <template v-if="empresaModulos === ''">
+              <label v-for="m in g.modulos" :key="m.id" class="check" :class="{ cambiado: m.id in pendientes }">
+                <input type="checkbox" :checked="activoEnPantalla(m)" @change="alternarActivo(m)" />
+                {{ m.nombre }}
+                <span v-if="m.exclusivo" class="badge interno" title="Módulo exclusivo: llega desactivado">Exclusivo</span>
+                <span v-if="!activoEnPantalla(m)" class="inactivo">desactivado</span>
+              </label>
+            </template>
+            <template v-else>
+              <div v-for="m in g.modulos" :key="m.id" class="fila-excepcion" :class="{ cambiado: m.id in pendientes }">
+                <span class="nombre-modulo">
+                  {{ m.nombre }}
+                  <span v-if="m.exclusivo" class="badge interno" title="Módulo exclusivo: llega desactivado">Exclusivo</span>
+                </span>
+                <select :value="excepcionEnPantalla(m)" @change="cambiarExcepcion(m, ($event.target as HTMLSelectElement).value)">
+                  <option value="heredar">Como lo general ({{ m.activoGeneral ? 'activo' : 'desactivado' }})</option>
+                  <option value="si">Activo en esta empresa</option>
+                  <option value="no">Desactivado en esta empresa</option>
+                </select>
+                <span :class="efectivoEnEmpresa(m) ? 'efectivo-si' : 'inactivo'">{{ efectivoEnEmpresa(m) ? 'activo' : 'desactivado' }}</span>
+              </div>
+            </template>
           </div>
         </div>
         <p v-if="modulosError" class="error">{{ modulosError }}</p>
@@ -625,5 +697,50 @@ watch(pestana, (p) => {
   padding: var(--space-4);
   font-size: 0.82rem;
   list-style: none;
+}
+.campo-empresa {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: var(--space-3);
+}
+.campo-empresa select {
+  max-width: 28rem;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  color: var(--text);
+}
+.fila-excepcion {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 5.5rem;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0.2rem 0.3rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.86rem;
+}
+.fila-excepcion.cambiado {
+  background: var(--color-brand-bg);
+}
+.fila-excepcion select {
+  font-size: 0.82rem;
+  height: 1.9rem;
+  padding: 0 0.4rem;
+}
+.efectivo-si {
+  color: var(--color-brand-darker);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+@media (max-width: 640px) {
+  .fila-excepcion {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 </style>

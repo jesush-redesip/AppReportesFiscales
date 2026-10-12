@@ -3,6 +3,14 @@
 Cada versión publicada con `scripts/publicar.ps1` agrega aquí su sección. Lo que esté
 entre la versión instalada y la nueva se muestra en la pantalla Actualizaciones.
 
+## 1.1.1 - 2026-10-12
+- Pagares: asientos contables desde el Aplicativo (desembolso, pagos con capital, intereses, IGTF y otros cargos, reversos) en la contabilidad del ano de la fecha contable
+- Pagares: moneda por pagare (USD indexado o Bs) y montos exactos en Bs del estado de cuenta del banco
+- Pagares: configuracion contable con buscador de cuentas
+- Cierre de Caja: las cuentas de sobrante y faltante pueden ser de cualquier grupo (buscador por codigo o nombre) y se validan al guardar
+- Cierre de Caja: boton Ver Resumen en los cierres contabilizados y cajas sangradas bajo su tienda
+- Modulos de la instalacion: excepciones por empresa (activar o desactivar un modulo solo para una empresa)
+
 ## 1.1.0 - 2026-10-09
 - Pagares: registrar pagares con tabla de amortizacion (cuota fija o capital fijo, intereses tasa/12 o dias/360), marcar pagos de capital e intereses, editar cuotas, cambiar la tasa y anular (sin asientos: convive con el PHP)
 - Nuevo permiso Pagares > Registrar, pagar, editar y anular

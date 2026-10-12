@@ -578,6 +578,41 @@ async function resumenCierre(bd, serieCaja, z) {
     }
 }
 /**
+ * Resumen de un cierre YA contabilizado, el mismo que se muestra al contabilizarlo: los
+ * asientos registrados y la caja/Z con sus documentos. Los asientos se ubican igual que
+ * al descontabilizar (fecha, caja, concepto 95 y comentario "CIERRE DE…"); el de costo
+ * de venta lleva "(COMPRAS)" en el comentario. Solo lectura.
+ */
+export async function resumenContabilizado(bd, params) {
+    const accountingDb = await resolveBdContable(bd, params.serie);
+    assertSafeDatabaseIdentifier(accountingDb);
+    const filas = await queryTenantRaw(bd, `SELECT D.ASIENTO, MAX(D.ASIENTOVISIBLE) AS ASIENTOVISIBLE, MAX(D.USUARIO) AS USUARIO,
+            MAX(CASE WHEN D.COMENTARIO LIKE '%(COMPRAS)%' THEN 1 ELSE 0 END) AS COMPRAS,
+            SUM(D.DEBE) AS DEBE,
+            (SELECT TOP 1 CONVERT(CHAR(10), R.FECHA, 103) + ' ' + CONVERT(CHAR(5), R.HORA, 108)
+             FROM ${accountingDb}.dbo.REGISTROAUDITORIA R WHERE R.ASIENTO = D.ASIENTO AND R.CONCEPTO = 95 ORDER BY R.HORA DESC) AS REGISTRADO
+     FROM ${accountingDb}.dbo.DIARIOAPUNTES D
+     WHERE D.FECHA = @FECHA AND D.SERIEDOCUMENTO = @CAJA AND D.COMENTARIO LIKE 'CIERRE DE%' AND D.CONCEPTO = 95
+     GROUP BY D.ASIENTO
+     -- El comentario trae la Z ("... Z - 125"): si la menciona, debe ser esta Z (puede haber varias en el día).
+     HAVING MAX(CASE WHEN D.COMENTARIO LIKE '%Z - %' THEN 1 ELSE 0 END) = 0
+         OR MAX(CASE WHEN D.COMENTARIO LIKE '%Z - ' + @ZTXT OR D.COMENTARIO LIKE '%Z - ' + @ZTXT + ' %' THEN 1 ELSE 0 END) = 1
+     ORDER BY D.ASIENTO`, {
+        FECHA: { type: () => sql.Date, value: parseYyyyMMdd(params.fecha) },
+        CAJA: { type: () => sql.NVarChar(10), value: params.serieCaja },
+        ZTXT: { type: () => sql.NVarChar(12), value: String(params.z) },
+    });
+    const asientos = filas.map((f) => ({
+        asiento: Number(f.ASIENTO),
+        asientoVisible: f.ASIENTOVISIBLE == null ? null : Number(f.ASIENTOVISIBLE),
+        tipo: Number(f.COMPRAS) === 1 ? 'Compras (costo de venta)' : 'Cierre de caja',
+        procesadoPor: String(f.USUARIO ?? '').trim(),
+        registrado: f.REGISTRADO ? String(f.REGISTRADO).trim() : null,
+        debe: Math.round(Number(f.DEBE ?? 0) * 100) / 100,
+    }));
+    return { asientos, resumen: await resumenCierre(bd, params.serieCaja, params.z) };
+}
+/**
  * Port of `descontabilizar.php`. **Fix over the legacy query**: the "already
  * reconciled, refuse to descontabilizar" guard used `PNORMA43STR != NULL` — in T-SQL
  * that comparison is never true regardless of the column's value, so the guard never

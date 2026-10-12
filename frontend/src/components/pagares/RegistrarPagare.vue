@@ -2,12 +2,13 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { api } from '../../lib/api';
 import BaseModal from '../BaseModal.vue';
+import CuentaBuscador from '../CuentaBuscador.vue';
 
 /**
  * Registrar un pagaré: datos del préstamo, vista previa de la tabla de amortización y
- * guardado. No genera asientos: los sigue haciendo el PHP (o la Fase 3).
+ * guardado (con el asiento de desembolso si la configuración contable lo indica).
  */
-const emit = defineEmits<{ cerrar: []; guardado: [r: { codPagares: number; aviso: string | null }] }>();
+const emit = defineEmits<{ cerrar: []; guardado: [r: { codPagares: number; aviso: string | null; asientoVisible: number | null }] }>();
 
 interface Serie {
   serie: string;
@@ -45,9 +46,25 @@ const f = reactive({
   mesesInteresAdelantado: 0,
   comision: 0 as number | '',
   cuentaComision: '611201035',
+  /** USD (créditos indexados, lo normal) o VES (bolívares, sin conversión). */
+  moneda: 'USD' as 'USD' | 'VES',
 });
 
 const series = ref<Serie[]>([]);
+/** La instalación genera asientos: se pide la tasa del desembolso y los cargos del banco. */
+const contabiliza = ref(false);
+const tasaCambio = ref<number | ''>('');
+const cargos = ref<{ descripcion: string; monto: number | '' }[]>([]);
+const tituloComision = ref<string | null>(null);
+/** Bs exactos que acreditó / cobró el banco; vacío = calculado. */
+const montoBs = ref<number | ''>('');
+const comisionBs = ref<number | ''>('');
+const enBs = computed(() => f.moneda === 'VES');
+const simbolo = computed(() => (enBs.value ? 'Bs' : 'USD'));
+const tasaEfectiva = computed(() => (enBs.value ? 1 : Number(tasaCambio.value) || 0));
+const montoBsCalculado = computed(() => Math.round((Number(f.monto) || 0) * tasaEfectiva.value * 100) / 100);
+const montoBsFinal = computed(() => (montoBs.value === '' ? montoBsCalculado.value : Number(montoBs.value)));
+const comisionBsCalculada = computed(() => Math.round(((montoBsFinal.value * (Number(f.comision) || 0)) / 100) * 100) / 100);
 const bancos = ref<{ cuenta: string; titulo: string }[]>([]);
 const error = ref('');
 const serieActual = computed(() => series.value.find((s) => s.serie === f.serie));
@@ -55,6 +72,16 @@ const serieActual = computed(() => series.value.find((s) => s.serie === f.serie)
 onMounted(async () => {
   try {
     series.value = await api.get<Serie[]>(`${BASE}/registro/series`);
+    const config = await api.get<{ contabilizar: boolean; cuentaComision: string }>(`${BASE}/config`);
+    contabiliza.value = config.contabilizar;
+    f.cuentaComision = config.cuentaComision || f.cuentaComision;
+    try {
+      const t = await api.get<{ cuentas: { codigo: string; titulo: string }[] }>(`${BASE}/config/cuentas`, { codigos: f.cuentaComision });
+      tituloComision.value = t.cuentas[0]?.titulo ?? null;
+    } catch {
+      /* sin título */
+    }
+    void sugerirTasa();
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'No se pudieron cargar las empresas.';
   }
@@ -73,6 +100,17 @@ watch(
     }
   },
 );
+async function sugerirTasa() {
+  if (!contabiliza.value || !f.fechaLiquidacion) return;
+  try {
+    const c = await api.get<{ tasa: number | null }>(`${BASE}/cotizacion`, { fecha: f.fechaLiquidacion });
+    if (c.tasa) tasaCambio.value = c.tasa;
+  } catch {
+    /* sin sugerencia */
+  }
+}
+watch(() => f.fechaLiquidacion, sugerirTasa);
+
 // El día de pago sigue a la fecha de liquidación hasta que el usuario lo cambie.
 watch(
   () => f.fechaLiquidacion,
@@ -135,14 +173,16 @@ const fecha = (v: string) => v.split('-').reverse().join('/');
 // --- Guardar ---
 const guardando = ref(false);
 const valido = computed(
-  () => Boolean(f.serie && f.cuentaBanco && Number(f.pagare) > 0 && Number.isInteger(Number(f.pagare)) && cuotas.value.length && !errorSimulacion.value),
+  () =>
+    Boolean(f.serie && f.cuentaBanco && Number(f.pagare) > 0 && Number.isInteger(Number(f.pagare)) && cuotas.value.length && !errorSimulacion.value) &&
+    (!contabiliza.value || enBs.value || Number(tasaCambio.value) > 0),
 );
 async function guardar() {
   if (!valido.value || guardando.value) return;
   guardando.value = true;
   error.value = '';
   try {
-    const r = await api.post<{ codPagares: number; aviso: string | null }>(`${BASE}/registro`, {
+    const r = await api.post<{ codPagares: number; aviso: string | null; asientoVisible: number | null }>(`${BASE}/registro`, {
       ...datosAmortizacion(),
       pagare: Number(f.pagare),
       serie: f.serie,
@@ -150,6 +190,17 @@ async function guardar() {
       comision: Number(f.comision) || 0,
       cuentaComision: f.cuentaComision.trim(),
       mesesInteresAdelantado: Number(f.mesesInteresAdelantado) || 0,
+      moneda: f.moneda,
+      ...(contabiliza.value
+        ? {
+            ...(enBs.value ? {} : { tasaCambio: Number(tasaCambio.value) }),
+            ...(montoBs.value !== '' ? { montoBs: Number(montoBs.value) } : {}),
+            ...(comisionBs.value !== '' ? { comisionBs: Number(comisionBs.value) } : {}),
+            cargos: cargos.value
+              .filter((c) => c.descripcion.trim() && Number(c.monto) > 0)
+              .map((c) => ({ descripcion: c.descripcion.trim(), monto: Number(c.monto) })),
+          }
+        : {}),
     });
     emit('guardado', r);
   } catch (e) {
@@ -195,8 +246,15 @@ async function guardar() {
 
       <fieldset>
         <legend>Condiciones</legend>
+        <label class="campo corto">
+          Moneda
+          <select v-model="f.moneda">
+            <option value="USD">USD (indexado)</option>
+            <option value="VES">Bs</option>
+          </select>
+        </label>
         <label class="campo">
-          Monto
+          Monto ({{ simbolo }})
           <input v-model.number="f.monto" type="number" min="0.01" step="0.01" required />
         </label>
         <label class="campo corto">
@@ -248,18 +306,48 @@ async function guardar() {
           Comisión bancaria %
           <input v-model.number="f.comision" type="number" min="0" step="0.01" />
         </label>
-        <label class="campo">
+        <div class="campo cuenta">
           Cuenta de comisión
-          <input v-model="f.cuentaComision" type="text" maxlength="15" />
+          <CuentaBuscador v-model="f.cuentaComision" :titulo="tituloComision" @elegida="(c) => (tituloComision = c.titulo)" />
+        </div>
+      </fieldset>
+
+      <fieldset v-if="contabiliza">
+        <legend>Asiento de desembolso</legend>
+        <label v-if="!enBs" class="campo corto">
+          Tasa Bs/USD
+          <input v-model.number="tasaCambio" type="number" min="0.0001" step="0.0001" required />
         </label>
+        <label class="campo corto">
+          Bs acreditados por el banco
+          <input v-model.number="montoBs" type="number" min="0" step="0.01" :placeholder="numero(montoBsCalculado)" />
+        </label>
+        <label class="campo corto">
+          Comisión (Bs)
+          <input v-model.number="comisionBs" type="number" min="0" step="0.01" :placeholder="numero(comisionBsCalculada)" />
+        </label>
+        <p class="nota">
+          <template v-if="!enBs && Number(f.monto) > 0 && Number(tasaCambio) > 0">
+            {{ numero(Number(f.monto)) }} USD × {{ numero(Number(tasaCambio)) }} = {{ numero(montoBsCalculado) }} Bs.
+          </template>
+          Deje los montos en Bs vacíos para usar los calculados, o escriba los del estado de cuenta del banco.
+        </p>
+        <div class="cargos">
+          <div v-for="(c, i) in cargos" :key="i" class="cargo">
+            <input v-model="c.descripcion" type="text" maxlength="80" placeholder="Concepto (impuesto 1x1000, firma electrónica…)" />
+            <input v-model.number="c.monto" type="number" min="0.01" step="0.01" placeholder="Bs" />
+            <button type="button" class="enlace" @click="cargos.splice(i, 1)">quitar</button>
+          </div>
+          <button type="button" class="enlace" @click="cargos.push({ descripcion: '', monto: '' })">+ otro cargo del banco</button>
+        </div>
       </fieldset>
 
       <p v-if="serieActual && !serieActual.bdContable" class="aviso">
-        La base contable de esta empresa no está en este servidor: el pagaré se registra sin su cuenta contable (210104) y el
-        PHP no podrá contabilizar sus pagos.
+        La base contable de esta empresa no está en este servidor: el pagaré se registra sin su cuenta contable (210104) y
+        no se podrán contabilizar sus pagos.
       </p>
-      <p class="nota">
-        Registrar no genera asientos (desembolso, comisión, intereses ni IGTF): se siguen haciendo en el PHP o en ICG.
+      <p v-if="!contabiliza" class="nota">
+        Registrar no genera asientos (la contabilización está apagada en la configuración): cárguelos en ICG.
       </p>
 
       <div class="previa">
@@ -270,10 +358,10 @@ async function guardar() {
             <tr>
               <th>Cuota</th>
               <th>Vencimiento</th>
-              <th>Saldo</th>
-              <th>Capital</th>
-              <th>Intereses</th>
-              <th>Total</th>
+              <th>Saldo ({{ simbolo }})</th>
+              <th>Capital ({{ simbolo }})</th>
+              <th>Intereses ({{ simbolo }})</th>
+              <th>Total ({{ simbolo }})</th>
             </tr>
           </thead>
           <tbody>
@@ -350,6 +438,10 @@ legend {
   font-weight: 400;
   color: var(--text);
 }
+.campo.cuenta {
+  min-width: 20rem;
+  max-width: 26rem;
+}
 .campo.corto input {
   min-width: 6rem;
   width: 8rem;
@@ -407,6 +499,31 @@ tfoot td {
   font-size: 0.85rem;
   margin: 0;
   padding: var(--space-2);
+}
+.cargos {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex-basis: 100%;
+}
+.cargo {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+.cargo input[type='text'] {
+  min-width: 20rem;
+}
+.cargo input[type='number'] {
+  width: 9rem;
+}
+.enlace {
+  background: none;
+  color: var(--color-brand-darker);
+  padding: 0;
+  height: auto;
+  font-size: 0.8rem;
+  align-self: flex-start;
 }
 .acciones {
   display: flex;

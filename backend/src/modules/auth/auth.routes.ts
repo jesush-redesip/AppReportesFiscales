@@ -25,7 +25,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
    * frontend lo pide al abrir y tras cambiar permisos o módulos activos: así el menú no
    * queda con lo que había al iniciar sesión.
    */
-  fastify.get('/api/auth/acceso', async (req) => accesoEfectivo(req.user!.codUsuario));
+  fastify.get('/api/auth/acceso', async (req) => accesoEfectivo(req.user!.codUsuario, req.user!.codEmpresa));
 
   /** Empresas del usuario, para el menú de cambio de empresa del encabezado. */
   fastify.get('/api/auth/empresas', async (req) => empresasDeSesion(req.user!));

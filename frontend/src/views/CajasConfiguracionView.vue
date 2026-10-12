@@ -3,6 +3,7 @@ import { onMounted, reactive, ref, watch } from 'vue';
 import { api } from '../lib/api';
 import type { BaseContable, ConfiguracionCuentas, CuentaContable } from '../lib/types';
 import AppIcon from '../components/icons/AppIcon.vue';
+import CuentaBuscador from '../components/CuentaBuscador.vue';
 import FormasPagoAsiento from '../components/FormasPagoAsiento.vue';
 
 type Pestana = 'cuentas' | 'formas-pago';
@@ -30,7 +31,8 @@ const cuentas = reactive<ConfiguracionCuentas>({
   incluirCostoVenta: true,
 });
 const basesContables = ref<BaseContable[]>([]);
-const cuentasDisponibles = ref<CuentaContable[]>([]);
+/** Títulos de las cuentas elegidas, según la base contable seleccionada. */
+const titulos = reactive<Record<string, string>>({});
 const cargando = ref(false);
 const listaCuentasLoading = ref(false);
 const guardando = ref(false);
@@ -39,21 +41,27 @@ const guardado = ref(false);
 /** Evita que el `watch` de bdContable dispare recargas mientras se puebla el formulario. */
 let inicializando = false;
 
+/**
+ * Trae el título de las cuentas elegidas desde la base contable seleccionada. Las que no
+ * vuelven no existen en esa base (p. ej. configuradas contra otra base contable).
+ */
 async function cargarListaCuentas(bdContable: string) {
-  if (!bdContable) {
-    cuentasDisponibles.value = [];
-    return;
-  }
+  for (const k of Object.keys(titulos)) delete titulos[k];
+  const codigos = CAMPOS_CUENTA.map((c) => cuentas[c.key]).filter(Boolean);
+  if (!bdContable || !codigos.length) return;
   listaCuentasLoading.value = true;
   try {
-    cuentasDisponibles.value = await api.get<CuentaContable[]>('/api/config/cuentas-disponibles', { bdContable });
+    const lista = await api.get<CuentaContable[]>('/api/config/cuentas-disponibles', { bdContable, codigos: codigos.join(',') });
+    lista.forEach((c) => (titulos[c.codigo] = c.titulo));
   } catch (err) {
-    cuentasDisponibles.value = [];
     error.value = err instanceof Error ? err.message : 'Error al cargar el plan de cuentas.';
   } finally {
     listaCuentasLoading.value = false;
   }
 }
+
+/** La cuenta elegida no existe en la base contable seleccionada. */
+const noExiste = (codigo: string) => Boolean(codigo) && Boolean(cuentas.bdContable) && !listaCuentasLoading.value && !titulos[codigo];
 
 async function cargar() {
   cargando.value = true;
@@ -91,18 +99,6 @@ async function guardar() {
   }
 }
 
-/**
- * Opciones del desplegable de una cuenta. Si el valor ya configurado no existe en el
- * plan de la base elegida (pasa al traer una configuración hecha contra otra base
- * contable), se agrega como opción marcada en vez de dejar el select en blanco — así
- * el valor no se pierde en silencio al guardar y queda visible que no pertenece a esta
- * base.
- */
-function opcionesDe(valorActual: string): CuentaContable[] {
-  const lista = cuentasDisponibles.value;
-  if (!valorActual || lista.some((c) => c.codigo === valorActual)) return lista;
-  return [{ codigo: valorActual, titulo: '(no existe en esta base contable)' }, ...lista];
-}
 
 watch(
   () => cuentas.bdContable,
@@ -153,7 +149,8 @@ onMounted(cargar);
       <template v-else>
         <p class="ayuda">
           Cuentas de sobrante y faltante que usa el cierre de caja de esta empresa. Elige primero la base contable de la
-          que se traen las cuentas.
+          que se traen las cuentas; después busca cada cuenta por su código o por parte del nombre (puede ser de cualquier
+          grupo del plan de cuentas).
         </p>
 
         <label class="campo">
@@ -166,21 +163,28 @@ onMounted(cargar);
           </select>
         </label>
 
-        <p v-if="listaCuentasLoading" class="estado">Cargando plan de cuentas...</p>
-        <p v-else-if="cuentas.bdContable && cuentasDisponibles.length === 0" class="estado">
-          Esta base contable no tiene cuentas con código que empiece por 7.
-        </p>
-
         <div class="grid-cuentas">
-          <label v-for="campo in CAMPOS_CUENTA" :key="campo.key" class="campo">
-            {{ campo.label }}
-            <select v-model="cuentas[campo.key]" :disabled="listaCuentasLoading">
-              <option value="">(sin asignar)</option>
-              <option v-for="c in opcionesDe(cuentas[campo.key])" :key="c.codigo" :value="c.codigo">
-                {{ c.codigo }} — {{ c.titulo }}
-              </option>
-            </select>
-          </label>
+          <div v-for="campo in CAMPOS_CUENTA" :key="campo.key" class="campo">
+            <span class="etiqueta-cuenta">
+              {{ campo.label }}
+              <button v-if="cuentas[campo.key]" type="button" class="enlace-quitar" @click="cuentas[campo.key] = ''">
+                quitar
+              </button>
+            </span>
+            <CuentaBuscador
+              v-model="cuentas[campo.key]"
+              url="/api/config/cuentas-disponibles"
+              :params="{ bdContable: cuentas.bdContable }"
+              :titulo="titulos[cuentas[campo.key]]"
+              :invalida="noExiste(cuentas[campo.key])"
+              :disabled="!cuentas.bdContable"
+              @elegida="(c) => (titulos[c.codigo] = c.titulo)"
+            />
+            <small v-if="!cuentas[campo.key]" class="sin-asignar">(sin asignar)</small>
+            <small v-else-if="noExiste(cuentas[campo.key])" class="error-cuenta">
+              La cuenta {{ cuentas[campo.key] }} no existe en esta base contable.
+            </small>
+          </div>
         </div>
 
         <div class="bloque">
@@ -296,5 +300,40 @@ onMounted(cargar);
   .grid-cuentas {
     grid-template-columns: 1fr;
   }
+}
+.etiqueta-cuenta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.enlace-quitar {
+  background: none;
+  border: 0;
+  padding: 0;
+  height: auto;
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--color-brand-darker);
+  cursor: pointer;
+}
+.enlace-quitar:hover:not(:disabled) {
+  background: none;
+  text-decoration: underline;
+}
+.sin-asignar,
+.error-cuenta {
+  font-size: 0.75rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.sin-asignar {
+  color: var(--text-faint);
+}
+.error-cuenta {
+  color: var(--color-error);
 }
 </style>

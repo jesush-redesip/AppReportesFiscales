@@ -86,7 +86,7 @@ async function emitirSesion(codUsuario: number, usuario: string, codEmpresa: num
     bd: empresa.bd,
   };
   const token = jwt.sign(sessionPayload, env.jwtSecret, { expiresIn: '8h' });
-  const acceso = await accesoEfectivo(codUsuario);
+  const acceso = await accesoEfectivo(codUsuario, empresa.codEmpresa);
   // El SUPERVISOR también ve solo los módulos que tenga asignados. Su administración
   // (Permisos de Usuario, Auditoría, Debug) no depende de módulos, así que nunca puede
   // quedarse sin acceso a la pantalla donde se los vuelve a asignar.
