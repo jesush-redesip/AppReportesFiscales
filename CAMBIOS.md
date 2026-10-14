@@ -3,6 +3,11 @@
 Cada versión publicada con `scripts/publicar.ps1` agrega aquí su sección. Lo que esté
 entre la versión instalada y la nueva se muestra en la pantalla Actualizaciones.
 
+## 1.1.4 - 2026-10-14
+- Retenciones ISLR: nueva descarga Formato XML (Excel) igual a la planilla vieja retISLR, con datos invalidos resaltados
+- Retenciones ISLR: descarga directa del XML para el SENIAT (RelacionRetencionesISLR)
+- Retenciones ISLR: la relacion incluye Fecha Consulta y fila de totales
+
 ## 1.1.3 - 2026-10-12
 - Nuevo modulo Scripts SQL (solo SUPERVISOR): catalogo de procedimientos y funciones por empresa, instalacion de scripts oficiales y scripts propios (crear o modificar procedimientos, funciones y vistas) con prueba previa, respaldo, historial, restauracion y descarga .sql
 - Pagares: las operaciones (registrar, pagar, editar, tasa, moneda, reversar, anular, configuracion) quedan en la auditoria

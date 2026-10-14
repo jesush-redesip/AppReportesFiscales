@@ -13,11 +13,15 @@ function fechaArchivo(yyyyMMdd: string | number | undefined): string | null {
  * navegador no deja leer el Content-Disposition del backend cuando están en orígenes
  * distintos (desarrollo), y así el nombre es igual en desarrollo y en el servicio.
  */
-export function nombreArchivo(modulo: string, params: Record<string, string | number | undefined>): string {
+export function nombreArchivo(
+  modulo: string,
+  params: Record<string, string | number | undefined>,
+  extension = 'xlsx',
+): string {
   const desde = fechaArchivo(params.desde);
   const hasta = fechaArchivo(params.hasta);
-  if (!desde || !hasta) return `${modulo}.xlsx`;
-  return desde === hasta ? `${modulo} ${desde}.xlsx` : `${modulo} ${desde} al ${hasta}.xlsx`;
+  if (!desde || !hasta) return `${modulo}.${extension}`;
+  return desde === hasta ? `${modulo} ${desde}.${extension}` : `${modulo} ${desde} al ${hasta}.${extension}`;
 }
 
 export function useReporteDownload() {
@@ -25,7 +29,12 @@ export function useReporteDownload() {
   const error = ref<string | null>(null);
 
   /** `modulo`: el nombre del reporte tal como se ve en el menú. */
-  async function descargar(path: string, params: Record<string, string | number | undefined>, modulo: string) {
+  async function descargar(
+    path: string,
+    params: Record<string, string | number | undefined>,
+    modulo: string,
+    extension = 'xlsx',
+  ) {
     loading.value = true;
     error.value = null;
     try {
@@ -34,7 +43,7 @@ export function useReporteDownload() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = nombreArchivo(modulo, params);
+      a.download = nombreArchivo(modulo, params, extension);
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
