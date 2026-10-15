@@ -20,7 +20,7 @@ function onSubmit(filtros: Filtros) {
 // (como la planilla vieja) y el XML del SENIAT directo.
 const DESCARGAS = {
   relacion: { path: '/api/reportes/retenciones-islr', nombre: 'Retenciones ISLR', ext: 'xlsx' },
-  formatoXml: { path: '/api/reportes/retenciones-islr/formato-xml', nombre: 'Retenciones ISLR - Formato XML', ext: 'xlsx' },
+  formatoXml: { path: '/api/reportes/retenciones-islr/formato-xml', nombre: 'Retenciones ISLR - Formato XML', ext: 'xlsm' },
   xml: { path: '/api/reportes/retenciones-islr/xml', nombre: 'Retenciones ISLR', ext: 'xml' },
 } as const;
 
@@ -47,7 +47,7 @@ function onDescargar(tipo: keyof typeof DESCARGAS) {
           <button
             class="secundario"
             :disabled="descargando"
-            title="Excel con el formato para migrar a XML (RIF del agente, período y una fila por retención)"
+            title="Excel con macro (.xlsm) en el formato de la planilla vieja: se pueden agregar registros y convertirlo a XML con el botón Convertir a XML"
             @click="onDescargar('formatoXml')"
           >
             Formato XML (Excel)

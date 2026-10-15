@@ -3,6 +3,10 @@
 Cada versión publicada con `scripts/publicar.ps1` agrega aquí su sección. Lo que esté
 entre la versión instalada y la nueva se muestra en la pantalla Actualizaciones.
 
+## 1.1.5 - 2026-10-15
+- Retenciones ISLR: el Formato XML ahora es un Excel con macro (.xlsm) igual a la planilla vieja, con boton Convertir a XML, ruta de salida, RIF de la empresa sin guiones, porcentaje sin decimales y 10 filas libres para agregar registros
+- Logo de la empresa como icono de la pagina
+
 ## 1.1.4 - 2026-10-14
 - Retenciones ISLR: nueva descarga Formato XML (Excel) igual a la planilla vieja retISLR, con datos invalidos resaltados
 - Retenciones ISLR: descarga directa del XML para el SENIAT (RelacionRetencionesISLR)

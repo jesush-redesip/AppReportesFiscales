@@ -22,15 +22,15 @@ export default async function retencionesIslrRoutes(fastify: FastifyInstance) {
     },
   );
 
-  // Excel con el formato de la planilla vieja para migrar a XML (hoja retISLR).
+  // Libro con macros (.xlsm) con el formato de la planilla vieja y su botón "Convertir a XML".
   fastify.get<{ Querystring: RetencionesIslrQuery }>(
     '/api/reportes/retenciones-islr/formato-xml',
     { schema: { querystring: retencionesIslrQuerySchema } },
     async (req, reply) => {
       const buffer = await generarFormatoXmlIslr(req.user!.bd, req.query);
       return reply
-        .header('Content-Disposition', `attachment; filename="FormatoXML_ISLR_${req.query.desde}_${req.query.hasta}.xlsx"`)
-        .type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        .header('Content-Disposition', `attachment; filename="FormatoXML_ISLR_${req.query.desde}_${req.query.hasta}.xlsm"`)
+        .type('application/vnd.ms-excel.sheet.macroEnabled.12')
         .send(buffer);
     },
   );
