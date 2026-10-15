@@ -208,7 +208,7 @@ onMounted(cargar);
 
       <div class="acciones">
         <span class="pendientes">{{ pendientes.size ? `${pendientes.size} cambio(s) sin guardar` : 'Sin cambios' }}</span>
-        <button type="button" class="secundario" :disabled="pendientes.size === 0 || guardando" @click="pendientes = new Map()">
+        <button type="button" class="secundario tono-aviso" :disabled="pendientes.size === 0 || guardando" @click="pendientes = new Map()">
           Descartar
         </button>
         <button type="button" :disabled="pendientes.size === 0 || guardando" @click="guardar">
@@ -219,13 +219,13 @@ onMounted(cargar);
       <h3>Nombres disponibles</h3>
       <form class="nuevo" @submit.prevent="crear">
         <input v-model="nuevoNombre" type="text" maxlength="60" placeholder="Nuevo nombre, p. ej. EFECTIVO EUR" />
-        <button type="submit" class="secundario" :disabled="!nuevoNombre.trim()">+ Agregar</button>
+        <button type="submit" class="secundario tono-marca" :disabled="!nuevoNombre.trim()">+ Agregar</button>
       </form>
       <ul class="catalogo">
         <li v-for="n in catalogo" :key="n.id" :class="{ sucio: tieneEspacios(n.descripcion) }">
           <template v-if="editandoId === n.id">
             <input v-model="textoEdicion" type="text" maxlength="60" @keyup.enter="confirmarEdicion(n)" @keyup.esc="editandoId = null" />
-            <button type="button" class="secundario pequeno" title="Guardar" @click="confirmarEdicion(n)">
+            <button type="button" class="secundario tono-marca pequeno" title="Guardar" @click="confirmarEdicion(n)">
               <AppIcon name="check" :size="12" />
             </button>
             <button type="button" class="secundario pequeno" title="Cancelar" @click="editandoId = null">

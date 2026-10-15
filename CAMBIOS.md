@@ -3,6 +3,9 @@
 Cada versión publicada con `scripts/publicar.ps1` agrega aquí su sección. Lo que esté
 entre la versión instalada y la nueva se muestra en la pantalla Actualizaciones.
 
+## 1.1.6 - 2026-10-15
+- Botones con colores segun la accion en todos los modulos: azul consulta y descargas, verde accion principal, ambar cambia datos, rojo revierte (Descontabilizar, Anular pagare)
+
 ## 1.1.5 - 2026-10-15
 - Retenciones ISLR: el Formato XML ahora es un Excel con macro (.xlsm) igual a la planilla vieja, con boton Convertir a XML, ruta de salida, RIF de la empresa sin guiones, porcentaje sin decimales y 10 filas libres para agregar registros
 - Logo de la empresa como icono de la pagina

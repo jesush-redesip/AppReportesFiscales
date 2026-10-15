@@ -33,7 +33,7 @@ function onDescargar() {
     <template v-if="previewData">
       <div class="acciones-preview">
         <h2>Vista previa</h2>
-        <button class="secundario" :disabled="descargando" @click="onDescargar">
+        <button class="secundario tono-info" :disabled="descargando" @click="onDescargar">
           {{ descargando ? 'Descargando...' : 'Descargar Excel' }}
         </button>
       </div>

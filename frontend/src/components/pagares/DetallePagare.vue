@@ -238,11 +238,11 @@ async function excel() {
       <div><dt>Intereses</dt><dd>{{ datos.pagare.FRECUENCIA_INTERESES || '—' }}</dd></div>
     </dl>
     <div class="barra">
-      <button type="button" class="secundario" :disabled="descargando" @click="excel"><AppIcon name="download" :size="15" /> Excel</button>
+      <button type="button" class="secundario tono-info" :disabled="descargando" @click="excel"><AppIcon name="download" :size="15" /> Excel</button>
       <template v-if="puedeGestionar">
-        <button type="button" class="secundario" @click="accion = { tipo: 'tasa', tasa: Number(datos.pagare.TASA) }">Cambiar tasa</button>
-        <button type="button" class="secundario" @click="accion = { tipo: 'moneda', moneda: enBs ? 'VES' : 'USD' }">Moneda: {{ simbolo }}</button>
-        <button type="button" class="secundario peligro" @click="accion = { tipo: 'anular', motivo: '' }">Anular pagaré</button>
+        <button type="button" class="secundario tono-aviso" @click="accion = { tipo: 'tasa', tasa: Number(datos.pagare.TASA) }">Cambiar tasa</button>
+        <button type="button" class="secundario tono-aviso" @click="accion = { tipo: 'moneda', moneda: enBs ? 'VES' : 'USD' }">Moneda: {{ simbolo }}</button>
+        <button type="button" class="secundario tono-peligro" @click="accion = { tipo: 'anular', motivo: '' }">Anular pagaré</button>
       </template>
     </div>
 

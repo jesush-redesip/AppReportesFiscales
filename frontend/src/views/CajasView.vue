@@ -423,7 +423,7 @@ async function accionTraspasar(g: GrupoCierre) {
             placeholder="Valor"
             @keyup.enter="calcularCotizacion"
           />
-          <button type="button" class="secundario" :disabled="cajasCotizacion.loading.value" @click="calcularCotizacion">
+          <button type="button" class="secundario tono-marca" :disabled="cajasCotizacion.loading.value" @click="calcularCotizacion">
             {{ cajasCotizacion.loading.value ? '...' : 'Calcular' }}
           </button>
         </div>
@@ -445,7 +445,7 @@ async function accionTraspasar(g: GrupoCierre) {
           <div class="acciones">
             <button
               type="button"
-              class="secundario boton-ver-asiento"
+              class="secundario tono-marca boton-ver-asiento"
               :disabled="asientoCargando !== null"
               :aria-busy="asientoCargando === claveGrupo(g)"
               @click="abrirAsientoCierre(g)"
@@ -456,7 +456,7 @@ async function accionTraspasar(g: GrupoCierre) {
             <button
               v-if="g.contabilizado"
               type="button"
-              class="secundario"
+              class="secundario tono-info"
               :disabled="resumenCargando !== null"
               @click="verResumen(g)"
             >
@@ -465,12 +465,12 @@ async function accionTraspasar(g: GrupoCierre) {
             <button
               v-if="g.contabilizado && auth.permisos.descontabilizar"
               type="button"
-              class="secundario"
+              class="secundario tono-peligro"
               @click="accionDescontabilizarCierre(g)"
             >
               Descontabilizar
             </button>
-            <button v-else type="button" class="secundario" @click="accionTraspasar(g)">Traspasar Facturas</button>
+            <button v-else type="button" class="secundario tono-aviso" @click="accionTraspasar(g)">Traspasar Facturas</button>
             <button v-if="puedeEditarDeclarado(g)" type="button" class="secundario" @click="abrirAgregarFormaPago(g)">
               Agregar Forma de Pago
             </button>

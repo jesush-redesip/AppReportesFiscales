@@ -456,7 +456,7 @@ watch(empresaModulos, () => {
         <p v-if="modulosError" class="error">{{ modulosError }}</p>
         <p v-if="modulosGuardado && !modulosError" class="exito"><AppIcon name="check" :size="14" /> {{ modulosGuardado }}</p>
         <div class="acciones-modulos">
-          <button type="button" class="secundario" :disabled="!cantidadPendientes || modulosGuardando" @click="pendientes = {}">
+          <button type="button" class="secundario tono-aviso" :disabled="!cantidadPendientes || modulosGuardando" @click="pendientes = {}">
             Descartar
           </button>
           <button type="button" :disabled="!cantidadPendientes || modulosGuardando" @click="guardarModulosInstalacion">

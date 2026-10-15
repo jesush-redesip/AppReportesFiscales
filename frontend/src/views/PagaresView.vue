@@ -278,7 +278,7 @@ async function registrado(r: { codPagares: number; aviso: string | null; asiento
           <AppIcon name="table" :size="15" />
           Consultar
         </button>
-        <button type="button" class="secundario" :disabled="!resultado || descargando" @click="descargarExcel">
+        <button type="button" class="secundario tono-info" :disabled="!resultado || descargando" @click="descargarExcel">
           <AppIcon name="download" :size="15" />
           Excel
         </button>

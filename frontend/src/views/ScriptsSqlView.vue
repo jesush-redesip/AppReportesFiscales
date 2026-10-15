@@ -441,7 +441,7 @@ watch([pestana, codEmpresa], () => {
       </fieldset>
 
       <div class="botones">
-        <button type="button" class="secundario" :disabled="!analisis?.ok || !empresasScript.length || trabajandoScript" @click="ejecutarScript('probar')">
+        <button type="button" class="secundario tono-info" :disabled="!analisis?.ok || !empresasScript.length || trabajandoScript" @click="ejecutarScript('probar')">
           {{ trabajandoScript && !confirmarAplicar ? 'Probando…' : 'Probar' }}
         </button>
         <button type="button" :disabled="!puedeAplicar" :title="puedeAplicar ? '' : 'Primero pruébelo sin errores en estas empresas'" @click="confirmarAplicar = true">
@@ -527,7 +527,7 @@ watch([pestana, codEmpresa], () => {
           <button type="button" :class="{ activa: verDef.vista === 'oficial' }" :disabled="!verDef.oficial" @click="verDef.vista = 'oficial'">Script oficial</button>
           <button
             type="button"
-            class="secundario boton-descargar"
+            class="secundario tono-info boton-descargar"
             :disabled="verDef.cargando || !(verDef.vista === 'actual' ? verDef.actual : verDef.oficial)"
             @click="
               descargarSql(
@@ -569,7 +569,7 @@ watch([pestana, codEmpresa], () => {
     <BaseModal :open="!!verTexto" :title="verTexto?.titulo ?? ''" ancho="min(1000px, 95vw)" @close="verTexto = null">
       <template v-if="verTexto">
         <div class="botones fin arriba">
-          <button type="button" class="secundario" @click="descargarSql(verTexto.archivo, verTexto.texto)">
+          <button type="button" class="secundario tono-info" @click="descargarSql(verTexto.archivo, verTexto.texto)">
             <AppIcon name="download" :size="14" /> Descargar .sql
           </button>
         </div>

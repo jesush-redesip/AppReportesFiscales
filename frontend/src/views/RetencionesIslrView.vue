@@ -43,9 +43,9 @@ function onDescargar(tipo: keyof typeof DESCARGAS) {
       <div class="acciones-preview">
         <h2>Vista previa</h2>
         <div class="botones-descarga">
-          <button class="secundario" :disabled="descargando" @click="onDescargar('relacion')">Descargar Excel</button>
+          <button class="secundario tono-info" :disabled="descargando" @click="onDescargar('relacion')">Descargar Excel</button>
           <button
-            class="secundario"
+            class="secundario tono-info"
             :disabled="descargando"
             title="Excel con macro (.xlsm) en el formato de la planilla vieja: se pueden agregar registros y convertirlo a XML con el botón Convertir a XML"
             @click="onDescargar('formatoXml')"
@@ -53,7 +53,7 @@ function onDescargar(tipo: keyof typeof DESCARGAS) {
             Formato XML (Excel)
           </button>
           <button
-            class="secundario"
+            class="secundario tono-marca"
             :disabled="descargando"
             title="Archivo XML para cargar en el portal del SENIAT"
             @click="onDescargar('xml')"

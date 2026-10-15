@@ -127,7 +127,7 @@ function claseResultado(e: EstadoActualizador['ultimoResultado']) {
           </span>
         </div>
         <div class="acciones">
-          <button class="secundario" :disabled="cargando" @click="consultar(true)">
+          <button class="secundario tono-info" :disabled="cargando" @click="consultar(true)">
             <span v-if="cargando" class="spinner" aria-hidden="true"></span>
             Buscar actualizaciones
           </button>
